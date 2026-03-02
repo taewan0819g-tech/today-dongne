@@ -425,18 +425,33 @@ export default function Home() {
               <p className="text-base text-gray-700 leading-relaxed whitespace-pre-wrap">
                 {selectedOffer.description}
               </p>
-              <p className="text-sm text-gray-600">{selectedOffer.address}{selectedOffer.detail_address ? ` ${selectedOffer.detail_address}` : ''}</p>
+              <p className="text-sm text-gray-600">{selectedOffer.address}</p>
               {typeof distances[selectedOffer.id] === 'number' && (
                 <p className="text-sm text-sky-600 font-medium">
                   📍 {formatDistance(distances[selectedOffer.id])}
                 </p>
               )}
-              <KakaoMapView
-                address={selectedOffer.address}
-                storeName={selectedOffer.store_name}
-                height="200px"
-                className="mt-2"
-              />
+              {selectedOffer.lat != null && selectedOffer.lng != null ? (
+                <>
+                  <KakaoMapView
+                    lat={selectedOffer.lat}
+                    lng={selectedOffer.lng}
+                    storeName={selectedOffer.store_name}
+                    height="200px"
+                    className="mt-2"
+                  />
+                  {selectedOffer.detail_address && (
+                    <p className="text-sm text-gray-500 mt-2">상세 주소: {selectedOffer.detail_address}</p>
+                  )}
+                </>
+              ) : (
+                <KakaoMapView
+                  address={selectedOffer.address}
+                  storeName={selectedOffer.store_name}
+                  height="200px"
+                  className="mt-2"
+                />
+              )}
               <p className="text-sm text-gray-500">
                 남은 수량: {selectedOffer.remain_qty}개 / 전체 {selectedOffer.total_qty}개
               </p>
