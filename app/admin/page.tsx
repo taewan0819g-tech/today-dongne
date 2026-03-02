@@ -243,6 +243,26 @@ export default function AdminPage() {
     }
   }, [modalOpen, selectedDate, fetchOffersForDate])
 
+  useEffect(() => {
+    const supabase = getSupabase()
+    if (!supabase || !loggedInStoreName) return
+    const channel = supabase
+      .channel('admin_daily_offers_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'daily_offers' },
+        () => {
+          fetchCountsForMonth(currentMonth)
+          fetchMyRegisteredDatesInMonth()
+          if (modalOpen && selectedDate) fetchOffersForDate(selectedDate)
+        }
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [loggedInStoreName, currentMonth, modalOpen, selectedDate, fetchCountsForMonth, fetchMyRegisteredDatesInMonth, fetchOffersForDate])
+
   const handleCellClick = (day: Date) => {
     if (!isSameMonth(day, currentMonth)) return
     setSelectedDate(day)
@@ -519,8 +539,8 @@ export default function AdminPage() {
                 const isCurrentMonth = isSameMonth(day, currentMonth)
                 const dateStr = format(day, 'yyyy-MM-dd')
                 const isMyRegistered = isCurrentMonth && myRegisteredDatesInMonth.includes(dateStr)
-                const isTakenByOthers = isCurrentMonth && count > 0 && !isMyRegistered
-                const isClickable = isCurrentMonth && (count === 0 || isMyRegistered)
+                const isFull = count >= MAX_OFFERS_PER_DAY
+                const isClickable = isCurrentMonth && (isMyRegistered || !isFull)
 
                 return (
                   <button
@@ -528,25 +548,25 @@ export default function AdminPage() {
                     type="button"
                     disabled={!isClickable}
                     onClick={() => handleCellClick(day)}
-                    title={isTakenByOthers ? '다른 사장님이 선점한 날짜 (마감)' : undefined}
+                    title={isFull && !isMyRegistered ? '해당 날짜 신청 마감 (5/5)' : undefined}
                     className={`
                       min-h-[64px] sm:min-h-[80px] rounded-lg flex flex-col items-center justify-center gap-0.5
                       text-sm transition-colors
                       ${!isCurrentMonth ? 'text-gray-300' : 'text-gray-800'}
-                      ${isTakenByOthers ? 'bg-gray-100 text-gray-400 opacity-75 cursor-not-allowed' : ''}
+                      ${isFull && !isMyRegistered ? 'bg-gray-100 text-gray-400 opacity-75 cursor-not-allowed' : ''}
                       ${isMyRegistered ? 'ring-1 ring-emerald-300 bg-emerald-50/70' : ''}
-                      ${isClickable && !isTakenByOthers ? 'hover:bg-sky-50 hover:ring-1 hover:ring-sky-200 active:bg-sky-100' : ''}
-                      ${isClickable && !isTakenByOthers && !isMyRegistered ? 'bg-white' : ''}
+                      ${isClickable && !(isFull && !isMyRegistered) ? 'hover:bg-sky-50 hover:ring-1 hover:ring-sky-200 active:bg-sky-100' : ''}
+                      ${isClickable && !isMyRegistered && !isFull ? 'bg-white' : ''}
                     `}
                   >
                     <span className="font-medium">{format(day, 'd')}</span>
                     {isMyRegistered ? (
-                      <span className="text-xs font-medium text-emerald-700">✅ 혜택 등록됨</span>
-                    ) : isTakenByOthers ? (
-                      <span className="text-xs font-medium text-gray-500">(마감)</span>
+                      <span className="text-xs font-medium text-emerald-700">✅ 등록 완료</span>
+                    ) : isFull ? (
+                      <span className="text-xs font-medium text-gray-500">🚫 마감 (5/5)</span>
                     ) : isCurrentMonth ? (
-                      <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium bg-gray-100 text-gray-700">
-                        {count}/{MAX_OFFERS_PER_DAY}
+                      <span className="text-xs font-medium text-sky-600">
+                        신청 가능 ({count}/{MAX_OFFERS_PER_DAY})
                       </span>
                     ) : null}
                   </button>
@@ -630,9 +650,21 @@ export default function AdminPage() {
                   </ul>
                 </div>
               )}
-              <h3 className="text-sm font-medium text-gray-700 mb-3">
-                {editingOfferId ? '혜택 수정' : '새 혜택 등록'}
-              </h3>
+              {editingOfferId ? (
+                <h3 className="text-sm font-medium text-gray-700 mb-3">혜택 수정</h3>
+              ) : offersForSelectedDate.length > 0 ? (
+                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 mb-3">
+                  <p className="text-sm text-amber-800 font-medium">
+                    이 날짜에 이미 등록하셨습니다.
+                  </p>
+                  <p className="text-xs text-amber-700 mt-1">
+                    기존 글을 수정·삭제하려면 위 목록에서 [수정] 또는 [삭제(취소)]를 눌러 주세요.
+                  </p>
+                </div>
+              ) : (
+                <h3 className="text-sm font-medium text-gray-700 mb-3">새 혜택 등록</h3>
+              )}
+            {(editingOfferId || offersForSelectedDate.length === 0) && (
             <form onSubmit={handleSubmit} className="space-y-4">
               {error && (
                 <div className="rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2">
@@ -786,7 +818,7 @@ export default function AdminPage() {
                     </button>
                     <button
                       type="submit"
-                      disabled={submitting || offersForSelectedDate.length >= MAX_OFFERS_PER_DAY}
+                      disabled={submitting || (selectedDate && (countsByDate[format(selectedDate, 'yyyy-MM-dd')] ?? 0) >= MAX_OFFERS_PER_DAY)}
                       className="flex-1 py-2.5 rounded-lg bg-sky-600 text-white font-medium hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {submitting ? '처리 중...' : '신청하기'}
@@ -795,6 +827,7 @@ export default function AdminPage() {
                 )}
               </div>
             </form>
+            )}
             </div>
           </div>
         </div>
