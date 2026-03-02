@@ -49,3 +49,12 @@ body {
   position: relative;
   z-index: 1;
 }
+
+/* 가로 스크롤 캐러셀: 스크롤바 숨김 */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

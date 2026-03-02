@@ -7,8 +7,12 @@ export const metadata: Metadata = {
   description: '로컬 쿠폰 서비스',
 }
 
-// 테스트용: 환경변수 대신 하드코딩 (CORB 확인 후 env로 복구 권장)
-const KAKAO_SCRIPT_SRC = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=8a171b4048ca146e25f42500c8a56a01&libraries=services&autoload=false'
+const KAKAO_SDK_BASE = 'https://dapi.kakao.com/v2/maps/sdk.js'
+const KAKAO_KEY = process.env.NEXT_PUBLIC_KAKAO_MAP_API_KEY ?? ''
+const hasKakaoKey = typeof KAKAO_KEY === 'string' && KAKAO_KEY.trim().length > 0
+const KAKAO_SCRIPT_SRC = hasKakaoKey
+  ? `${KAKAO_SDK_BASE}?appkey=${encodeURIComponent(KAKAO_KEY.trim())}&libraries=services&autoload=false`
+  : ''
 
 export default function RootLayout({
   children,
@@ -18,10 +22,12 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <head>
-        <Script
-          src={KAKAO_SCRIPT_SRC}
-          strategy="beforeInteractive"
-        />
+        {hasKakaoKey && (
+          <Script
+            src={KAKAO_SCRIPT_SRC}
+            strategy="beforeInteractive"
+          />
+        )}
       </head>
       <body className="antialiased">
         <div className="max-w-md mx-auto min-h-screen bg-gray-50">

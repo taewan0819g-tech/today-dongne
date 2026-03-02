@@ -89,6 +89,22 @@ export default function AdminPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [showPostcodeModal, setShowPostcodeModal] = useState(false)
+  const [addressPreviewCoords, setAddressPreviewCoords] = useState<{ lat: number; lng: number } | null>(null)
+
+  useEffect(() => {
+    if (!form.address.trim()) {
+      setAddressPreviewCoords(null)
+      return
+    }
+    let cancelled = false
+    getCoordsFromAddress(form.address.trim())
+      .then((coords) => {
+        if (!cancelled && coords) setAddressPreviewCoords(coords)
+        else if (!cancelled) setAddressPreviewCoords(null)
+      })
+      .catch(() => { if (!cancelled) setAddressPreviewCoords(null) })
+    return () => { cancelled = true }
+  }, [form.address])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -364,41 +380,7 @@ export default function AdminPage() {
       return
     }
 
-    const isEdit = editingOfferId !== null
-
-    if (isEdit) {
-      const existing = offersForSelectedDate.find((o) => o.id === editingOfferId)
-      const newRemainQty = existing
-        ? Math.min(existing.remain_qty, qty)
-        : qty
-      const coords = await getCoordsFromAddress(address)
-      const { error: updateError } = await (supabase as any)
-        .from('daily_offers')
-        .update({
-          description,
-          address,
-          detail_address,
-          total_qty: qty,
-          remain_qty: newRemainQty,
-          lat: coords?.lat ?? null,
-          lng: coords?.lng ?? null,
-        })
-        .eq('id', editingOfferId)
-        .eq('store_name', loggedInStoreName)
-      setSubmitting(false)
-      if (updateError) {
-        setError(updateError.message || '수정에 실패했습니다.')
-        return
-      }
-      await fetchOffersForDate(selectedDate)
-      await fetchCountsForMonth(currentMonth)
-      await fetchMyRegisteredDatesInMonth()
-      setEditingOfferId(null)
-      setForm({ description: '', total_qty: '', address: '', detail_address: '' })
-      setSelectedFiles([])
-      return
-    }
-
+    // 1. 업로드 먼저 실행: selectedFiles가 있으면 Storage 업로드 후 imageUrls 확보
     let imageUrls: string[] = []
     if (selectedFiles.length > 0) {
       try {
@@ -420,6 +402,46 @@ export default function AdminPage() {
       }
     }
 
+    const isEdit = editingOfferId !== null
+
+    if (isEdit) {
+      const existing = offersForSelectedDate.find((o) => o.id === editingOfferId)
+      const newRemainQty = existing
+        ? Math.min(existing.remain_qty, qty)
+        : qty
+      const coords = await getCoordsFromAddress(address)
+      const updatePayload: Record<string, unknown> = {
+        description,
+        address,
+        detail_address,
+        total_qty: qty,
+        remain_qty: newRemainQty,
+        lat: coords?.lat ?? null,
+        lng: coords?.lng ?? null,
+      }
+      if (imageUrls.length > 0) {
+        updatePayload.image_urls = imageUrls
+      }
+      const { error: updateError } = await (supabase as any)
+        .from('daily_offers')
+        .update(updatePayload)
+        .eq('id', editingOfferId)
+        .eq('store_name', loggedInStoreName)
+      setSubmitting(false)
+      if (updateError) {
+        setError(updateError.message || '수정에 실패했습니다.')
+        return
+      }
+      await fetchOffersForDate(selectedDate)
+      await fetchCountsForMonth(currentMonth)
+      await fetchMyRegisteredDatesInMonth()
+      setEditingOfferId(null)
+      setForm({ description: '', total_qty: '', address: '', detail_address: '' })
+      setSelectedFiles([])
+      return
+    }
+
+    // 신규(Insert): 확보한 imageUrls 반영
     const coords = await getCoordsFromAddress(address)
     const payload: DailyOfferInsert = {
       target_date: format(selectedDate, 'yyyy-MM-dd'),
@@ -743,12 +765,20 @@ export default function AdminPage() {
                     <p className="text-xs font-medium text-gray-600 mb-1.5">
                       📍 위치 확인 — 지도에 표시된 위치가 맞는지 확인해 주세요
                     </p>
-                    <KakaoMapView
-                      address={form.address.trim()}
-                      storeName={loggedInStoreName || '가게 위치'}
-                      height="160px"
-                      className="rounded-xl overflow-hidden border border-gray-200"
-                    />
+                    {addressPreviewCoords ? (
+                      <KakaoMapView
+                        lat={addressPreviewCoords.lat}
+                        lng={addressPreviewCoords.lng}
+                        storeName={loggedInStoreName || '가게 위치'}
+                        height="200px"
+                        width="100%"
+                        className="rounded-xl overflow-hidden border border-gray-200"
+                      />
+                    ) : (
+                      <div className="rounded-xl bg-gray-100 flex items-center justify-center text-gray-500 text-sm" style={{ height: 160 }}>
+                        위치 확인 중...
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

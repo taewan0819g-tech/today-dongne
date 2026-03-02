@@ -403,58 +403,70 @@ export default function Home() {
               <span className="text-sm text-gray-500">내용보기</span>
             </div>
 
+            {/* 1. 가게 이름 */}
+            <h2 className="text-xl font-bold text-gray-900 mb-3">{selectedOffer.store_name}</h2>
+
+            {/* 2. 가게 사진 (가로 스크롤/캐러셀) - 원본 비율 유지, object-contain, 스크롤바 숨김 */}
             {selectedOffer.image_urls && selectedOffer.image_urls.length > 0 && (
-              <div className="w-full overflow-x-auto snap-x snap-mandatory flex gap-0 -mx-4 mb-4">
+              <div
+                className="w-full overflow-x-auto snap-x snap-mandatory flex gap-0 -mx-4 mb-4 scrollbar-hide"
+                style={{
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none',
+                }}
+              >
                 {selectedOffer.image_urls.map((url, i) => (
                   <div
                     key={i}
-                    className="flex-shrink-0 w-full max-w-full aspect-[4/3] snap-center bg-gray-100"
+                    className="flex-shrink-0 w-full max-w-full snap-center flex items-center justify-center bg-gray-100 min-h-[120px]"
+                    style={{ maxHeight: 400 }}
                   >
                     <img
                       src={url}
                       alt={`${selectedOffer.store_name} ${i + 1}`}
-                      className="w-full h-full object-cover"
+                      className="w-full h-auto max-h-[400px] object-contain block"
+                      style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'contain' }}
                     />
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="flex-1 space-y-4">
-              <h2 className="text-xl font-bold text-gray-900">{selectedOffer.store_name}</h2>
-              <p className="text-base text-gray-700 leading-relaxed whitespace-pre-wrap">
-                {selectedOffer.description}
+            {/* 3. 혜택 내용 (상세 설명) */}
+            <p className="text-base text-gray-700 leading-relaxed whitespace-pre-wrap mb-4">
+              {selectedOffer.description}
+            </p>
+
+            {/* 4. 수량 표시 */}
+            <p className="text-sm text-gray-600 mb-4">
+              남은 수량: {selectedOffer.remain_qty}개 / 전체 {selectedOffer.total_qty}개
+            </p>
+
+            {/* 5. 주소 텍스트 (메인 + 상세) */}
+            <p className="text-sm text-gray-600 mb-4">
+              {selectedOffer.address}{selectedOffer.detail_address ? ` ${selectedOffer.detail_address}` : ''}
+            </p>
+            {typeof distances[selectedOffer.id] === 'number' && (
+              <p className="text-sm text-sky-600 font-medium mb-4">
+                📍 {formatDistance(distances[selectedOffer.id])}
               </p>
-              <p className="text-sm text-gray-600">{selectedOffer.address}</p>
-              {typeof distances[selectedOffer.id] === 'number' && (
-                <p className="text-sm text-sky-600 font-medium">
-                  📍 {formatDistance(distances[selectedOffer.id])}
-                </p>
-              )}
+            )}
+
+            {/* 6. 카카오맵 지도 영역 */}
+            <div className="flex-1 min-h-0">
               {selectedOffer.lat != null && selectedOffer.lng != null ? (
-                <>
-                  <KakaoMapView
-                    lat={selectedOffer.lat}
-                    lng={selectedOffer.lng}
-                    storeName={selectedOffer.store_name}
-                    height="200px"
-                    className="mt-2"
-                  />
-                  {selectedOffer.detail_address && (
-                    <p className="text-sm text-gray-500 mt-2">상세 주소: {selectedOffer.detail_address}</p>
-                  )}
-                </>
-              ) : (
                 <KakaoMapView
-                  address={selectedOffer.address}
+                  lat={selectedOffer.lat}
+                  lng={selectedOffer.lng}
                   storeName={selectedOffer.store_name}
-                  height="200px"
-                  className="mt-2"
+                  height="300px"
+                  className="mt-2 rounded-xl overflow-hidden"
                 />
+              ) : (
+                <div className="mt-2 rounded-xl bg-gray-100 flex items-center justify-center text-gray-500 text-sm" style={{ height: 200 }}>
+                  지도 정보가 없습니다
+                </div>
               )}
-              <p className="text-sm text-gray-500">
-                남은 수량: {selectedOffer.remain_qty}개 / 전체 {selectedOffer.total_qty}개
-              </p>
             </div>
 
             <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-gray-50 border-t border-gray-200">

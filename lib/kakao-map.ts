@@ -27,13 +27,23 @@ declare global {
   }
 }
 
-// 테스트용: 환경변수 대신 하드코딩 (CORB 확인 후 env로 복구 권장)
-const KAKAO_SCRIPT_FULL_URL = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=8a171b4048ca146e25f42500c8a56a01&libraries=services&autoload=false'
+const KAKAO_SDK_BASE = 'https://dapi.kakao.com/v2/maps/sdk.js'
 
 let scriptLoadPromise: Promise<void> | null = null
 
+function getKakaoScriptUrl(): string | null {
+  const key = process.env.NEXT_PUBLIC_KAKAO_MAP_API_KEY
+  if (!key || typeof key !== 'string' || key.trim().length === 0) {
+    console.error('카카오 API 키가 환경변수에 없습니다!')
+    return null
+  }
+  return `${KAKAO_SDK_BASE}?appkey=${encodeURIComponent(key.trim())}&libraries=services&autoload=false`
+}
+
 export function loadKakaoMapScript(): Promise<void> {
   if (typeof window === 'undefined') return Promise.reject(new Error('window undefined'))
+  const scriptUrl = getKakaoScriptUrl()
+  if (!scriptUrl) return Promise.reject(new Error('NEXT_PUBLIC_KAKAO_MAP_API_KEY is not set'))
   // layout에서 이미 스크립트가 로드된 경우: services 준비될 때까지 maps.load() 대기
   if (window.kakao?.maps) {
     if (window.kakao.maps.services) return Promise.resolve()
@@ -58,7 +68,7 @@ export function loadKakaoMapScript(): Promise<void> {
   if (scriptLoadPromise) return scriptLoadPromise
   scriptLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script')
-    script.src = KAKAO_SCRIPT_FULL_URL
+    script.src = scriptUrl
     console.log('로드 시도하는 카카오 URL:', script.src)
     script.async = true
     script.onload = () => {
