@@ -27,20 +27,39 @@ declare global {
   }
 }
 
-const SCRIPT_URL = 'https://dapi.kakao.com/v2/maps/sdk.js'
+// 테스트용: 환경변수 대신 하드코딩 (CORB 확인 후 env로 복구 권장)
+const KAKAO_SCRIPT_FULL_URL = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=8a171b4048ca146e25f42500c8a56a01&libraries=services&autoload=false'
 
 let scriptLoadPromise: Promise<void> | null = null
 
 export function loadKakaoMapScript(): Promise<void> {
   if (typeof window === 'undefined') return Promise.reject(new Error('window undefined'))
-  if (window.kakao?.maps) return Promise.resolve()
+  // layout에서 이미 스크립트가 로드된 경우: services 준비될 때까지 maps.load() 대기
+  if (window.kakao?.maps) {
+    if (window.kakao.maps.services) return Promise.resolve()
+    return new Promise((resolve) => {
+      window.kakao!.maps.load(() => {
+        if (window.kakao?.maps?.services) {
+          resolve()
+          return
+        }
+        const check = (retries = 15): void => {
+          if (window.kakao?.maps?.services) {
+            resolve()
+            return
+          }
+          if (retries <= 0) resolve()
+          else setTimeout(() => check(retries - 1), 100)
+        }
+        check()
+      })
+    })
+  }
   if (scriptLoadPromise) return scriptLoadPromise
-  const key = process.env.NEXT_PUBLIC_KAKAO_MAP_API_KEY
-  if (!key) return Promise.reject(new Error('NEXT_PUBLIC_KAKAO_MAP_API_KEY is not set'))
   scriptLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script')
-    // 역지오코딩(coord2Address) 사용 시 libraries=services 필수
-    script.src = `${SCRIPT_URL}?appkey=${encodeURIComponent(key)}&libraries=services&autoload=false`
+    script.src = KAKAO_SCRIPT_FULL_URL
+    console.log('로드 시도하는 카카오 URL:', script.src)
     script.async = true
     script.onload = () => {
       if (!window.kakao?.maps) {
@@ -123,20 +142,50 @@ export function getAddressFromCoords(lat: number, lng: number): Promise<string |
   return loadKakaoMapScript()
     .then(() => {
       return new Promise<string | null>((resolve) => {
-        if (!window.kakao?.maps?.services) {
+        if (typeof window === 'undefined') {
+          console.error('[getAddressFromCoords] window is undefined')
+          resolve(null)
+          return
+        }
+        if (!window.kakao) {
+          console.error('[getAddressFromCoords] 카카오 스크립트가 로드되지 않았습니다. (window.kakao 없음)')
+          resolve(null)
+          return
+        }
+        if (!window.kakao.maps) {
+          console.error('[getAddressFromCoords] 카카오 maps 객체가 없습니다. SDK 로드 후 kakao.maps.load() 완료 여부를 확인하세요.')
+          resolve(null)
+          return
+        }
+        if (!window.kakao.maps.services) {
+          console.error('[getAddressFromCoords] 카카오 maps.services가 없습니다. 스크립트 URL에 &libraries=services 가 포함되어 있는지 확인하세요.')
           resolve(null)
           return
         }
         const geocoder = new window.kakao.maps.services.Geocoder()
         geocoder.coord2Address(lng, lat, (result, status) => {
-          if (status !== 'OK' || !result?.length) {
+          if (status !== 'OK') {
+            console.error('[getAddressFromCoords] 역지오코딩 실패:', { status, lat, lng })
+            resolve(null)
+            return
+          }
+          if (!result?.length) {
+            console.error('[getAddressFromCoords] 역지오코딩 결과 없음:', { lat, lng })
             resolve(null)
             return
           }
           const name = result[0].address?.address_name
-          resolve(typeof name === 'string' ? name : null)
+          if (typeof name !== 'string') {
+            console.error('[getAddressFromCoords] address_name 없음:', result[0])
+            resolve(null)
+            return
+          }
+          resolve(name)
         })
       })
     })
-    .catch(() => null)
+    .catch((err) => {
+      console.error('[getAddressFromCoords] 예외:', err)
+      return null
+    })
 }

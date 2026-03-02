@@ -103,7 +103,22 @@ export default function Home() {
       setOffers([])
       return
     }
-    setOffers((data as OfferRow[]) ?? [])
+    const rows = (data as OfferRow[]) ?? []
+    // UI 테스트용: lat/lng 없는 행에 춘천 효자동 근처 Mock 좌표 부여
+    const MOCK_COORDS = [
+      { lat: 37.871, lng: 127.746 },
+      { lat: 37.86, lng: 127.73 },
+      { lat: 37.868, lng: 127.738 },
+      { lat: 37.875, lng: 127.75 },
+      { lat: 37.862, lng: 127.735 },
+    ]
+    const withMock = rows.map((row, i) => {
+      const needMock = row.lat == null || row.lng == null
+      if (!needMock) return row
+      const mock = MOCK_COORDS[i % MOCK_COORDS.length]
+      return { ...row, lat: mock.lat, lng: mock.lng }
+    })
+    setOffers(withMock)
   }, [])
 
   useEffect(() => {
@@ -377,7 +392,7 @@ export default function Home() {
               <p className="text-sm text-gray-600">{selectedOffer.address}</p>
               {typeof distances[selectedOffer.id] === 'number' && (
                 <p className="text-sm text-sky-600 font-medium">
-                  {distances[selectedOffer.id] < 1 ? '🚶‍♂️' : '🚗'} {formatDistance(distances[selectedOffer.id])}
+                  📍 {formatDistance(distances[selectedOffer.id])}
                 </p>
               )}
               <KakaoMapView
@@ -445,7 +460,7 @@ export default function Home() {
                           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
                             {typeof distances[offer.id] === 'number' && (
                               <span className="text-xs text-sky-600 font-medium">
-                                {distances[offer.id] < 1 ? '🚶‍♂️' : '🚗'} {formatDistance(distances[offer.id])}
+                                📍 {formatDistance(distances[offer.id])}
                               </span>
                             )}
                             <p className="text-xs text-gray-600">
