@@ -23,6 +23,7 @@ export interface Database {
           total_qty: number
           remain_qty: number
           address: string
+          detail_address: string | null
           lat: number | null
           lng: number | null
           image_urls: string[] | null
@@ -36,6 +37,7 @@ export interface Database {
           total_qty: number
           remain_qty?: number
           address: string
+          detail_address?: string | null
           lat?: number | null
           lng?: number | null
           image_urls?: string[] | null
@@ -49,6 +51,7 @@ export interface Database {
           total_qty?: number
           remain_qty?: number
           address?: string
+          detail_address?: string | null
           lat?: number | null
           lng?: number | null
           image_urls?: string[] | null

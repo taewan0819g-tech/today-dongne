@@ -18,6 +18,7 @@ type OfferRow = {
   total_qty: number
   remain_qty: number
   address: string
+  detail_address?: string | null
   lat: number | null
   lng: number | null
   image_urls: string[] | null
@@ -94,7 +95,7 @@ export default function Home() {
     const today = getToday()
     const { data, error } = await supabase
       .from('daily_offers')
-      .select('id, target_date, store_name, description, total_qty, remain_qty, address, lat, lng, image_urls')
+      .select('id, target_date, store_name, description, total_qty, remain_qty, address, detail_address, lat, lng, image_urls')
       .eq('target_date', today)
       .order('created_at', { ascending: true })
       .limit(5)
@@ -424,7 +425,7 @@ export default function Home() {
               <p className="text-base text-gray-700 leading-relaxed whitespace-pre-wrap">
                 {selectedOffer.description}
               </p>
-              <p className="text-sm text-gray-600">{selectedOffer.address}</p>
+              <p className="text-sm text-gray-600">{selectedOffer.address}{selectedOffer.detail_address ? ` ${selectedOffer.detail_address}` : ''}</p>
               {typeof distances[selectedOffer.id] === 'number' && (
                 <p className="text-sm text-sky-600 font-medium">
                   📍 {formatDistance(distances[selectedOffer.id])}
@@ -491,7 +492,7 @@ export default function Home() {
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-gray-900 truncate">{offer.store_name}</p>
                           <p className="text-sm text-gray-700 mt-0.5">{offer.description}</p>
-                          <p className="text-xs text-gray-500 mt-1">{offer.address}</p>
+                          <p className="text-xs text-gray-500 mt-1">{offer.address}{offer.detail_address ? ` ${offer.detail_address}` : ''}</p>
                           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
                             {typeof distances[offer.id] === 'number' && (
                               <span className="text-xs text-sky-600 font-medium">

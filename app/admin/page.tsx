@@ -59,6 +59,7 @@ type AdminOfferRow = {
   store_name: string
   description: string
   address: string
+  detail_address: string | null
   total_qty: number
   remain_qty: number
   lat: number | null
@@ -82,6 +83,7 @@ export default function AdminPage() {
     description: '',
     total_qty: '',
     address: '',
+    detail_address: '',
   })
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -219,7 +221,7 @@ export default function AdminPage() {
       const dateStr = format(date, 'yyyy-MM-dd')
       const { data, error: fetchErr } = await supabase
         .from('daily_offers')
-        .select('id, store_name, description, address, total_qty, remain_qty, lat, lng, image_urls')
+        .select('id, store_name, description, address, detail_address, total_qty, remain_qty, lat, lng, image_urls')
         .eq('target_date', dateStr)
         .eq('store_name', loggedInStoreName)
         .order('created_at', { ascending: true })
@@ -249,6 +251,7 @@ export default function AdminPage() {
       description: '',
       total_qty: '',
       address: saved?.address ?? '',
+      detail_address: '',
     })
     setSelectedFiles([])
     setEditingOfferId(null)
@@ -270,6 +273,7 @@ export default function AdminPage() {
       description: offer.description,
       total_qty: String(offer.total_qty),
       address: offer.address,
+      detail_address: offer.detail_address ?? '',
     })
     setSelectedFiles([])
     setError(null)
@@ -314,6 +318,7 @@ export default function AdminPage() {
     const description = form.description.trim()
     const total_qty = form.total_qty.trim()
     const address = form.address.trim()
+    const detail_address = form.detail_address.trim() || null
 
     if (!description) {
       setError('혜택 내용을 입력해 주세요.')
@@ -352,6 +357,7 @@ export default function AdminPage() {
         .update({
           description,
           address,
+          detail_address,
           total_qty: qty,
           remain_qty: newRemainQty,
           lat: coords?.lat ?? null,
@@ -368,7 +374,7 @@ export default function AdminPage() {
       await fetchCountsForMonth(currentMonth)
       await fetchMyRegisteredDatesInMonth()
       setEditingOfferId(null)
-      setForm({ description: '', total_qty: '', address: '' })
+      setForm({ description: '', total_qty: '', address: '', detail_address: '' })
       setSelectedFiles([])
       return
     }
@@ -402,6 +408,7 @@ export default function AdminPage() {
       total_qty: qty,
       remain_qty: qty,
       address,
+      detail_address: detail_address ?? null,
       lat: coords?.lat ?? null,
       lng: coords?.lng ?? null,
       image_urls: imageUrls.length > 0 ? imageUrls : null,
@@ -416,7 +423,7 @@ export default function AdminPage() {
     }
 
     saveAdminShopInfo({ store_name: loggedInStoreName, address })
-
+    alert('신청이 완료되었습니다!')
     await fetchOffersForDate(selectedDate)
     await fetchCountsForMonth(currentMonth)
     await fetchMyRegisteredDatesInMonth()
@@ -425,6 +432,7 @@ export default function AdminPage() {
       description: '',
       total_qty: '',
       address: saved?.address ?? '',
+      detail_address: '',
     })
     setSelectedFiles([])
   }
@@ -509,43 +517,38 @@ export default function AdminPage() {
                 const key = format(day, 'yyyy-MM-dd')
                 const count = countsByDate[key] ?? 0
                 const isCurrentMonth = isSameMonth(day, currentMonth)
-                const isFull = count >= MAX_OFFERS_PER_DAY
-                const isNearFull = count === MAX_OFFERS_PER_DAY - 1
-                const isClickable = isCurrentMonth
-
                 const dateStr = format(day, 'yyyy-MM-dd')
                 const isMyRegistered = isCurrentMonth && myRegisteredDatesInMonth.includes(dateStr)
+                const isTakenByOthers = isCurrentMonth && count > 0 && !isMyRegistered
+                const isClickable = isCurrentMonth && (count === 0 || isMyRegistered)
+
                 return (
                   <button
                     key={key}
                     type="button"
                     disabled={!isClickable}
                     onClick={() => handleCellClick(day)}
+                    title={isTakenByOthers ? '다른 사장님이 선점한 날짜 (마감)' : undefined}
                     className={`
                       min-h-[64px] sm:min-h-[80px] rounded-lg flex flex-col items-center justify-center gap-0.5
                       text-sm transition-colors
                       ${!isCurrentMonth ? 'text-gray-300' : 'text-gray-800'}
-                      ${isFull ? 'bg-gray-100' : ''}
+                      ${isTakenByOthers ? 'bg-gray-100 text-gray-400 opacity-75 cursor-not-allowed' : ''}
                       ${isMyRegistered ? 'ring-1 ring-emerald-300 bg-emerald-50/70' : ''}
-                      ${isClickable ? 'hover:bg-sky-50 hover:ring-1 hover:ring-sky-200 active:bg-sky-100' : ''}
-                      ${isClickable && !isFull && !isMyRegistered ? 'bg-white' : ''}
+                      ${isClickable && !isTakenByOthers ? 'hover:bg-sky-50 hover:ring-1 hover:ring-sky-200 active:bg-sky-100' : ''}
+                      ${isClickable && !isTakenByOthers && !isMyRegistered ? 'bg-white' : ''}
                     `}
                   >
                     <span className="font-medium">{format(day, 'd')}</span>
                     {isMyRegistered ? (
                       <span className="text-xs font-medium text-emerald-700">✅ 혜택 등록됨</span>
-                    ) : isFull ? (
-                      <span className="text-xs font-medium text-gray-500">마감</span>
-                    ) : (
-                      <span
-                        className={`
-                          inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium
-                          ${isNearFull ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-700'}
-                        `}
-                      >
+                    ) : isTakenByOthers ? (
+                      <span className="text-xs font-medium text-gray-500">(마감)</span>
+                    ) : isCurrentMonth ? (
+                      <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium bg-gray-100 text-gray-700">
                         {count}/{MAX_OFFERS_PER_DAY}
                       </span>
-                    )}
+                    ) : null}
                   </button>
                 )
               })
@@ -689,6 +692,20 @@ export default function AdminPage() {
                     주소 검색
                   </button>
                 </div>
+                <div className="mt-2">
+                  <label htmlFor="admin_detail_address" className="block text-xs font-medium text-gray-600 mb-1">
+                    상세 주소 (선택)
+                  </label>
+                  <input
+                    id="admin_detail_address"
+                    type="text"
+                    value={form.detail_address}
+                    onChange={(e) => setForm((f) => ({ ...f, detail_address: e.target.value }))}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 text-sm"
+                    placeholder="예: 상가 1층 102호, 2층 201호"
+                    autoComplete="off"
+                  />
+                </div>
                 {form.address.trim() && (
                   <div className="mt-3">
                     <p className="text-xs font-medium text-gray-600 mb-1.5">
@@ -743,7 +760,7 @@ export default function AdminPage() {
                       type="button"
                       onClick={() => {
                         setEditingOfferId(null)
-                        setForm({ description: '', total_qty: '', address: '' })
+                        setForm({ description: '', total_qty: '', address: '', detail_address: '' })
                         setSelectedFiles([])
                       }}
                       className="flex-1 py-2.5 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
