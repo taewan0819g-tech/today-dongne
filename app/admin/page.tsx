@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import {
   format,
   startOfMonth,
@@ -15,12 +16,16 @@ import {
   endOfWeek,
 } from 'date-fns'
 import { ko } from 'date-fns/locale'
+import { KakaoPostcodeEmbed } from 'react-daum-postcode'
+import type { Address } from 'react-daum-postcode'
 import { getSupabase } from '@/lib/supabase/client'
 import type { DailyOfferInsert } from '@/lib/supabase/database.types'
 import { getCoordsFromAddress } from '@/lib/kakao-map'
+import KakaoMapView from '@/components/KakaoMapView'
 
 const MAX_OFFERS_PER_DAY = 5
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토']
+const LOGGED_IN_STORE_KEY = 'logged_in_store'
 
 const ADMIN_SHOP_INFO_KEY = 'admin_shop_info'
 type AdminShopInfo = { store_name: string; address: string }
@@ -62,8 +67,11 @@ type AdminOfferRow = {
 }
 
 export default function AdminPage() {
+  const router = useRouter()
+  const [loggedInStoreName, setLoggedInStoreName] = useState<string | null>(null)
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [countsByDate, setCountsByDate] = useState<Record<string, number>>({})
+  const [myRegisteredDatesInMonth, setMyRegisteredDatesInMonth] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
@@ -71,7 +79,6 @@ export default function AdminPage() {
   const [editingOfferId, setEditingOfferId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState({
-    store_name: '',
     description: '',
     total_qty: '',
     address: '',
@@ -79,9 +86,32 @@ export default function AdminPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showPostcodeModal, setShowPostcodeModal] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const store = window.localStorage.getItem(LOGGED_IN_STORE_KEY)
+    if (!store || !store.trim()) {
+      router.replace('/')
+      return
+    }
+    setLoggedInStoreName(store.trim())
+  }, [router])
 
   const MAX_IMAGES = 3
   const BUCKET_NAME = 'offer_images'
+
+  const handlePostcodeComplete = useCallback((data: Address) => {
+    let fullAddress = data.address
+    if (data.addressType === 'R') {
+      let extra = ''
+      if (data.bname) extra += data.bname
+      if (data.buildingName) extra += extra ? `, ${data.buildingName}` : data.buildingName
+      if (extra) fullAddress += ` (${extra})`
+    }
+    setForm((f) => ({ ...f, address: fullAddress }))
+    setShowPostcodeModal(false)
+  }, [])
 
   const fetchCountsForMonth = useCallback(async (month: Date) => {
     const supabase = getSupabase()
@@ -113,6 +143,7 @@ export default function AdminPage() {
   }, [])
 
   useEffect(() => {
+    if (!loggedInStoreName) return
     const supabase = getSupabase()
     if (!supabase) return
     let cancelled = false
@@ -147,7 +178,29 @@ export default function AdminPage() {
     return () => {
       cancelled = true
     }
-  }, [currentMonth])
+  }, [currentMonth, loggedInStoreName])
+
+  const fetchMyRegisteredDatesInMonth = useCallback(async () => {
+    if (!loggedInStoreName) return
+    const supabase = getSupabase()
+    if (!supabase) return
+    const start = startOfMonth(currentMonth)
+    const end = endOfMonth(currentMonth)
+    const startStr = format(start, 'yyyy-MM-dd')
+    const endStr = format(end, 'yyyy-MM-dd')
+    const { data } = await supabase
+      .from('daily_offers')
+      .select('target_date')
+      .eq('store_name', loggedInStoreName)
+      .gte('target_date', startStr)
+      .lte('target_date', endStr)
+    const rows = (data ?? []) as { target_date: string }[]
+    setMyRegisteredDatesInMonth(Array.from(new Set(rows.map((r) => r.target_date))))
+  }, [currentMonth, loggedInStoreName])
+
+  useEffect(() => {
+    fetchMyRegisteredDatesInMonth()
+  }, [fetchMyRegisteredDatesInMonth])
 
   const monthStart = startOfMonth(currentMonth)
   const monthEnd = endOfMonth(currentMonth)
@@ -160,6 +213,7 @@ export default function AdminPage() {
 
   const fetchOffersForDate = useCallback(
     async (date: Date) => {
+      if (!loggedInStoreName) return
       const supabase = getSupabase()
       if (!supabase) return
       const dateStr = format(date, 'yyyy-MM-dd')
@@ -167,6 +221,7 @@ export default function AdminPage() {
         .from('daily_offers')
         .select('id, store_name, description, address, total_qty, remain_qty, lat, lng, image_urls')
         .eq('target_date', dateStr)
+        .eq('store_name', loggedInStoreName)
         .order('created_at', { ascending: true })
       if (fetchErr) {
         setOffersForSelectedDate([])
@@ -174,7 +229,7 @@ export default function AdminPage() {
       }
       setOffersForSelectedDate((data as AdminOfferRow[]) ?? [])
     },
-    []
+    [loggedInStoreName]
   )
 
   useEffect(() => {
@@ -191,7 +246,6 @@ export default function AdminPage() {
     setSelectedDate(day)
     const saved = loadAdminShopInfo()
     setForm({
-      store_name: saved?.store_name ?? '',
       description: '',
       total_qty: '',
       address: saved?.address ?? '',
@@ -213,7 +267,6 @@ export default function AdminPage() {
   const handleEditClick = (offer: AdminOfferRow) => {
     setEditingOfferId(offer.id)
     setForm({
-      store_name: offer.store_name,
       description: offer.description,
       total_qty: String(offer.total_qty),
       address: offer.address,
@@ -223,19 +276,21 @@ export default function AdminPage() {
   }
 
   const handleDeleteClick = async (offer: AdminOfferRow) => {
-    if (!confirm('정말 삭제하시겠습니까?')) return
+    if (!loggedInStoreName || !confirm('정말 삭제하시겠습니까?')) return
     const supabase = getSupabase()
     if (!supabase) return
     const { error: deleteError } = await supabase
       .from('daily_offers')
       .delete()
       .eq('id', offer.id)
+      .eq('store_name', loggedInStoreName)
     if (deleteError) {
       setError(deleteError.message || '삭제에 실패했습니다.')
       return
     }
     await fetchOffersForDate(selectedDate!)
     await fetchCountsForMonth(currentMonth)
+    await fetchMyRegisteredDatesInMonth()
     setError(null)
   }
 
@@ -254,17 +309,12 @@ export default function AdminPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedDate) return
+    if (!selectedDate || !loggedInStoreName) return
 
-    const store_name = form.store_name.trim()
     const description = form.description.trim()
     const total_qty = form.total_qty.trim()
     const address = form.address.trim()
 
-    if (!store_name) {
-      setError('가게명을 입력해 주세요.')
-      return
-    }
     if (!description) {
       setError('혜택 내용을 입력해 주세요.')
       return
@@ -300,7 +350,6 @@ export default function AdminPage() {
       const { error: updateError } = await (supabase as any)
         .from('daily_offers')
         .update({
-          store_name,
           description,
           address,
           total_qty: qty,
@@ -309,6 +358,7 @@ export default function AdminPage() {
           lng: coords?.lng ?? null,
         })
         .eq('id', editingOfferId)
+        .eq('store_name', loggedInStoreName)
       setSubmitting(false)
       if (updateError) {
         setError(updateError.message || '수정에 실패했습니다.')
@@ -316,8 +366,9 @@ export default function AdminPage() {
       }
       await fetchOffersForDate(selectedDate)
       await fetchCountsForMonth(currentMonth)
+      await fetchMyRegisteredDatesInMonth()
       setEditingOfferId(null)
-      setForm({ store_name: '', description: '', total_qty: '', address: '' })
+      setForm({ description: '', total_qty: '', address: '' })
       setSelectedFiles([])
       return
     }
@@ -346,7 +397,7 @@ export default function AdminPage() {
     const coords = await getCoordsFromAddress(address)
     const payload: DailyOfferInsert = {
       target_date: format(selectedDate, 'yyyy-MM-dd'),
-      store_name,
+      store_name: loggedInStoreName,
       description,
       total_qty: qty,
       remain_qty: qty,
@@ -364,13 +415,13 @@ export default function AdminPage() {
       return
     }
 
-    saveAdminShopInfo({ store_name, address })
+    saveAdminShopInfo({ store_name: loggedInStoreName, address })
 
     await fetchOffersForDate(selectedDate)
     await fetchCountsForMonth(currentMonth)
+    await fetchMyRegisteredDatesInMonth()
     const saved = loadAdminShopInfo()
     setForm({
-      store_name: saved?.store_name ?? '',
       description: '',
       total_qty: '',
       address: saved?.address ?? '',
@@ -378,9 +429,17 @@ export default function AdminPage() {
     setSelectedFiles([])
   }
 
+  if (loggedInStoreName === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <p className="text-gray-500 text-sm">로그인 확인 중...</p>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
-      <header className="mb-4 flex items-center justify-between">
+      <header className="mb-4 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <Image
             src="/logo.png"
@@ -391,7 +450,7 @@ export default function AdminPage() {
           />
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-bold text-gray-800 truncate">
-              사장님 혜택 신청
+              {loggedInStoreName} 사장님, 환영합니다!
             </h1>
             <p className="mt-0.5 text-sm text-gray-500">
               날짜를 선택하면 해당 날짜에 혜택을 등록할 수 있습니다. (일당 최대 5건)
@@ -454,6 +513,8 @@ export default function AdminPage() {
                 const isNearFull = count === MAX_OFFERS_PER_DAY - 1
                 const isClickable = isCurrentMonth
 
+                const dateStr = format(day, 'yyyy-MM-dd')
+                const isMyRegistered = isCurrentMonth && myRegisteredDatesInMonth.includes(dateStr)
                 return (
                   <button
                     key={key}
@@ -465,12 +526,15 @@ export default function AdminPage() {
                       text-sm transition-colors
                       ${!isCurrentMonth ? 'text-gray-300' : 'text-gray-800'}
                       ${isFull ? 'bg-gray-100' : ''}
+                      ${isMyRegistered ? 'ring-1 ring-emerald-300 bg-emerald-50/70' : ''}
                       ${isClickable ? 'hover:bg-sky-50 hover:ring-1 hover:ring-sky-200 active:bg-sky-100' : ''}
-                      ${isClickable && !isFull ? 'bg-white' : ''}
+                      ${isClickable && !isFull && !isMyRegistered ? 'bg-white' : ''}
                     `}
                   >
                     <span className="font-medium">{format(day, 'd')}</span>
-                    {isFull ? (
+                    {isMyRegistered ? (
+                      <span className="text-xs font-medium text-emerald-700">✅ 혜택 등록됨</span>
+                    ) : isFull ? (
                       <span className="text-xs font-medium text-gray-500">마감</span>
                     ) : (
                       <span
@@ -572,20 +636,7 @@ export default function AdminPage() {
                   {error}
                 </div>
               )}
-              <div>
-                <label htmlFor="admin_store_name" className="block text-sm font-medium text-gray-700 mb-1">
-                  가게명
-                </label>
-                <input
-                  id="admin_store_name"
-                  type="text"
-                  value={form.store_name}
-                  onChange={(e) => setForm((f) => ({ ...f, store_name: e.target.value }))}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-                  placeholder="가게 이름을 입력하세요"
-                  autoComplete="organization"
-                />
-              </div>
+              <p className="text-sm text-gray-600 py-1">등록 가게: <strong>{loggedInStoreName}</strong></p>
               <div>
                 <label htmlFor="admin_description" className="block text-sm font-medium text-gray-700 mb-1">
                   혜택 내용
@@ -620,15 +671,37 @@ export default function AdminPage() {
                 <label htmlFor="admin_address" className="block text-sm font-medium text-gray-700 mb-1">
                   주소
                 </label>
-                <input
-                  id="admin_address"
-                  type="text"
-                  value={form.address}
-                  onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-                  placeholder="가게 주소를 입력하세요"
-                  autoComplete="street-address"
-                />
+                <div className="flex gap-2">
+                  <input
+                    id="admin_address"
+                    type="text"
+                    value={form.address}
+                    onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                    placeholder="가게 주소를 입력하세요"
+                    autoComplete="street-address"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPostcodeModal(true)}
+                    className="flex-shrink-0 px-3 py-2 rounded-lg bg-sky-600 text-white text-sm font-medium hover:bg-sky-700 active:bg-sky-800"
+                  >
+                    주소 검색
+                  </button>
+                </div>
+                {form.address.trim() && (
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-gray-600 mb-1.5">
+                      📍 위치 확인 — 지도에 표시된 위치가 맞는지 확인해 주세요
+                    </p>
+                    <KakaoMapView
+                      address={form.address.trim()}
+                      storeName={loggedInStoreName || '가게 위치'}
+                      height="160px"
+                      className="rounded-xl overflow-hidden border border-gray-200"
+                    />
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -670,7 +743,7 @@ export default function AdminPage() {
                       type="button"
                       onClick={() => {
                         setEditingOfferId(null)
-                        setForm({ store_name: '', description: '', total_qty: '', address: '' })
+                        setForm({ description: '', total_qty: '', address: '' })
                         setSelectedFiles([])
                       }}
                       className="flex-1 py-2.5 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
@@ -705,6 +778,44 @@ export default function AdminPage() {
                 )}
               </div>
             </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 다음(카카오) 우편번호 검색 모달 */}
+      {showPostcodeModal && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col bg-black/50 p-2 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="주소 검색"
+          onClick={() => setShowPostcodeModal(false)}
+        >
+          <div
+            className="bg-white w-full max-w-lg mx-auto rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
+              <span className="text-sm font-medium text-gray-700">주소 검색</span>
+              <button
+                type="button"
+                onClick={() => setShowPostcodeModal(false)}
+                className="p-2 rounded-lg hover:bg-gray-200 text-gray-600"
+                aria-label="닫기"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto min-h-[400px]">
+              <KakaoPostcodeEmbed
+                onComplete={handlePostcodeComplete}
+                onClose={() => setShowPostcodeModal(false)}
+                style={{ width: '100%', height: 450 }}
+                autoClose
+              />
             </div>
           </div>
         </div>

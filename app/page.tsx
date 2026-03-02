@@ -71,9 +71,10 @@ export default function Home() {
     description: string
   } | null>(null)
   const [liveTime, setLiveTime] = useState(() => new Date())
-  const [showPasswordModal, setShowPasswordModal] = useState(false)
-  const [adminPassword, setAdminPassword] = useState('')
-  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [showOwnerModal, setShowOwnerModal] = useState(false)
+  const [ownerStoreName, setOwnerStoreName] = useState('')
+  const [ownerPassword, setOwnerPassword] = useState('')
+  const [ownerError, setOwnerError] = useState<string | null>(null)
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
   const [locationLabel, setLocationLabel] = useState<string | null>(null)
@@ -287,17 +288,51 @@ export default function Home() {
   const hasClaimedToday = dailyStatus !== null && dailyStatus.claimDate === today
   const isMyClaimedOffer = (offerId: string) => hasClaimedToday && dailyStatus!.offerId === offerId
 
-  const handleAdminSubmit = (e: React.FormEvent) => {
+  const handleOwnerSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setPasswordError(null)
-    const expected = process.env.NEXT_PUBLIC_OWNER_PASSWORD ?? ''
-    if (adminPassword === expected) {
-      setShowPasswordModal(false)
-      setAdminPassword('')
-      router.push('/admin')
+    const storeName = ownerStoreName.trim()
+    const password = ownerPassword
+    if (!storeName) {
+      setOwnerError('가게 이름을 입력해 주세요.')
       return
     }
-    setPasswordError('비밀번호가 일치하지 않습니다.')
+    setOwnerError(null)
+    const supabase = getSupabase()
+    if (!supabase) {
+      setOwnerError('연결을 사용할 수 없습니다.')
+      return
+    }
+    const { data: existing, error: fetchErr } = await (supabase as any)
+      .from('store_owners')
+      .select('store_name, password')
+      .eq('store_name', storeName)
+      .maybeSingle()
+    if (fetchErr) {
+      setOwnerError('확인 중 오류가 발생했습니다.')
+      return
+    }
+    if (!existing) {
+      const { error: insertErr } = await (supabase as any)
+        .from('store_owners')
+        .insert({ store_name: storeName, password })
+      if (insertErr) {
+        setOwnerError(insertErr.message || '가입에 실패했습니다.')
+        return
+      }
+    } else {
+      if (existing.password !== password) {
+        setOwnerError('비밀번호가 틀렸습니다.')
+        return
+      }
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('logged_in_store', storeName)
+    }
+    setShowOwnerModal(false)
+    setOwnerStoreName('')
+    setOwnerPassword('')
+    setOwnerError(null)
+    router.push('/admin')
   }
 
   return (
@@ -514,7 +549,7 @@ export default function Home() {
             <div className="mt-12 pb-8 text-center">
               <button
                 type="button"
-                onClick={() => setShowPasswordModal(true)}
+                onClick={() => setShowOwnerModal(true)}
                 className="text-gray-400 hover:text-gray-500 text-xs"
               >
                 사장님 혜택 신청하기
@@ -524,14 +559,15 @@ export default function Home() {
         )}
       </div>
 
-      {/* 비밀번호 모달 */}
-      {showPasswordModal && (
+      {/* 사장님 로그인/가입 모달 */}
+      {showOwnerModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           onClick={() => {
-            setShowPasswordModal(false)
-            setPasswordError(null)
-            setAdminPassword('')
+            setShowOwnerModal(false)
+            setOwnerError(null)
+            setOwnerStoreName('')
+            setOwnerPassword('')
           }}
           role="dialog"
           aria-modal="true"
@@ -540,26 +576,37 @@ export default function Home() {
             className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold text-gray-900 mb-3">관리자 확인</h2>
-            <form onSubmit={handleAdminSubmit}>
+            <h2 className="text-lg font-semibold text-gray-900 mb-3">사장님 로그인</h2>
+            <p className="text-sm text-gray-500 mb-4">가게 이름과 비밀번호를 입력하세요. (처음이면 자동 가입됩니다)</p>
+            <form onSubmit={handleOwnerSubmit} className="space-y-3">
               <input
-                type="password"
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-                placeholder="비밀번호"
+                type="text"
+                value={ownerStoreName}
+                onChange={(e) => setOwnerStoreName(e.target.value)}
+                placeholder="가게 이름"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                autoComplete="organization"
                 autoFocus
               />
-              {passwordError && (
-                <p className="mt-2 text-sm text-red-600">{passwordError}</p>
+              <input
+                type="password"
+                value={ownerPassword}
+                onChange={(e) => setOwnerPassword(e.target.value)}
+                placeholder="비밀번호"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                autoComplete="current-password"
+              />
+              {ownerError && (
+                <p className="text-sm text-red-600">{ownerError}</p>
               )}
-              <div className="flex gap-2 mt-4">
+              <div className="flex gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => {
-                    setShowPasswordModal(false)
-                    setAdminPassword('')
-                    setPasswordError(null)
+                    setShowOwnerModal(false)
+                    setOwnerStoreName('')
+                    setOwnerPassword('')
+                    setOwnerError(null)
                   }}
                   className="flex-1 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium"
                 >
