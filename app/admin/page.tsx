@@ -1,0 +1,487 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import Image from 'next/image'
+import Link from 'next/link'
+import {
+  format,
+  startOfMonth,
+  endOfMonth,
+  eachDayOfInterval,
+  isSameMonth,
+  addMonths,
+  subMonths,
+  startOfWeek,
+  endOfWeek,
+} from 'date-fns'
+import { ko } from 'date-fns/locale'
+import { getSupabase } from '@/lib/supabase/client'
+import type { DailyOfferInsert } from '@/lib/supabase/database.types'
+
+const MAX_OFFERS_PER_DAY = 5
+const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토']
+
+export default function AdminPage() {
+  const [currentMonth, setCurrentMonth] = useState(new Date())
+  const [countsByDate, setCountsByDate] = useState<Record<string, number>>({})
+  const [loading, setLoading] = useState(true)
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [form, setForm] = useState({
+    store_name: '',
+    description: '',
+    total_qty: '',
+    address: '',
+  })
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const MAX_IMAGES = 3
+  const BUCKET_NAME = 'offer_images'
+
+  const fetchCountsForMonth = useCallback(async (month: Date) => {
+    const supabase = getSupabase()
+    if (!supabase) return
+    const start = startOfMonth(month)
+    const end = endOfMonth(month)
+    const startStr = format(start, 'yyyy-MM-dd')
+    const endStr = format(end, 'yyyy-MM-dd')
+
+    const { data, error: fetchError } = await supabase
+      .from('daily_offers')
+      .select('target_date')
+      .gte('target_date', startStr)
+      .lte('target_date', endStr)
+
+    if (fetchError) {
+      console.error(fetchError)
+      setCountsByDate({})
+      return
+    }
+
+    const rows = (data ?? []) as { target_date: string }[]
+    const counts: Record<string, number> = {}
+    rows.forEach((row) => {
+      const d = row.target_date
+      counts[d] = (counts[d] ?? 0) + 1
+    })
+    setCountsByDate(counts)
+  }, [])
+
+  useEffect(() => {
+    const supabase = getSupabase()
+    if (!supabase) return
+    let cancelled = false
+    setLoading(true)
+    const start = startOfMonth(currentMonth)
+    const end = endOfMonth(currentMonth)
+    const startStr = format(start, 'yyyy-MM-dd')
+    const endStr = format(end, 'yyyy-MM-dd')
+
+    supabase
+      .from('daily_offers')
+      .select('target_date')
+      .gte('target_date', startStr)
+      .lte('target_date', endStr)
+      .then(({ data, error: fetchError }) => {
+        if (cancelled) return
+        setLoading(false)
+        if (fetchError) {
+          console.error(fetchError)
+          setCountsByDate({})
+          return
+        }
+        const rows = (data ?? []) as { target_date: string }[]
+        const counts: Record<string, number> = {}
+        rows.forEach((row: { target_date: string }) => {
+          const d = row.target_date
+          counts[d] = (counts[d] ?? 0) + 1
+        })
+        setCountsByDate(counts)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentMonth])
+
+  const monthStart = startOfMonth(currentMonth)
+  const monthEnd = endOfMonth(currentMonth)
+  const calendarStart = startOfWeek(monthStart, { weekStartsOn: 0 })
+  const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 0 })
+  const days = eachDayOfInterval({ start: calendarStart, end: calendarEnd })
+
+  const handlePrevMonth = () => setCurrentMonth((m) => subMonths(m, 1))
+  const handleNextMonth = () => setCurrentMonth((m) => addMonths(m, 1))
+
+  const handleCellClick = (day: Date) => {
+    const key = format(day, 'yyyy-MM-dd')
+    const count = countsByDate[key] ?? 0
+    if (count >= MAX_OFFERS_PER_DAY) return
+    setSelectedDate(day)
+    setForm({ store_name: '', description: '', total_qty: '', address: '' })
+    setSelectedFiles([])
+    setError(null)
+    setModalOpen(true)
+  }
+
+  const handleCloseModal = () => {
+    setModalOpen(false)
+    setSelectedDate(null)
+    setSelectedFiles([])
+    setError(null)
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files?.length) return
+    const list = Array.from(files).filter((f) => f.type.startsWith('image/'))
+    const combined = [...selectedFiles, ...list].slice(0, MAX_IMAGES)
+    setSelectedFiles(combined)
+    e.target.value = ''
+  }
+
+  const removeFile = (index: number) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedDate) return
+
+    const store_name = form.store_name.trim()
+    const description = form.description.trim()
+    const total_qty = form.total_qty.trim()
+    const address = form.address.trim()
+
+    if (!store_name) {
+      setError('가게명을 입력해 주세요.')
+      return
+    }
+    if (!description) {
+      setError('혜택 내용을 입력해 주세요.')
+      return
+    }
+    const qty = parseInt(total_qty, 10)
+    if (!total_qty || isNaN(qty) || qty < 1) {
+      setError('수량은 1 이상의 숫자를 입력해 주세요.')
+      return
+    }
+    if (!address) {
+      setError('주소를 입력해 주세요.')
+      return
+    }
+
+    setSubmitting(true)
+    setError(null)
+
+    const supabase = getSupabase()
+    if (!supabase) {
+      setSubmitting(false)
+      setError('연결을 사용할 수 없습니다.')
+      return
+    }
+
+    let imageUrls: string[] = []
+    if (selectedFiles.length > 0) {
+      try {
+        const uploadPromises = selectedFiles.map(async (file) => {
+          const ext = file.name.split('.').pop() || 'jpg'
+          const path = `${crypto.randomUUID()}.${ext}`
+          const { error: uploadError } = await supabase.storage
+            .from(BUCKET_NAME)
+            .upload(path, file, { cacheControl: '3600', upsert: false })
+          if (uploadError) throw uploadError
+          const { data } = supabase.storage.from(BUCKET_NAME).getPublicUrl(path)
+          return data.publicUrl
+        })
+        imageUrls = await Promise.all(uploadPromises)
+      } catch (err: unknown) {
+        setSubmitting(false)
+        setError(err instanceof Error ? err.message : '사진 업로드에 실패했습니다.')
+        return
+      }
+    }
+
+    const payload: DailyOfferInsert = {
+      target_date: format(selectedDate, 'yyyy-MM-dd'),
+      store_name,
+      description,
+      total_qty: qty,
+      address,
+      image_urls: imageUrls.length > 0 ? imageUrls : null,
+    }
+
+    const { error: insertError } = await supabase.from('daily_offers').insert(payload as any)
+
+    setSubmitting(false)
+    if (insertError) {
+      setError(insertError.message || '등록에 실패했습니다.')
+      return
+    }
+
+    await fetchCountsForMonth(currentMonth)
+    handleCloseModal()
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
+      <header className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <Image
+            src="/logo.png"
+            alt="오늘동네"
+            width={140}
+            height={40}
+            className="h-10 w-auto flex-shrink-0 object-contain"
+          />
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-bold text-gray-800 truncate">
+              사장님 혜택 신청
+            </h1>
+            <p className="mt-0.5 text-sm text-gray-500">
+              날짜를 선택하면 해당 날짜에 혜택을 등록할 수 있습니다. (일당 최대 5건)
+            </p>
+          </div>
+        </div>
+        <Link
+          href="/"
+          className="text-sm text-gray-500 hover:text-gray-700"
+        >
+          ← 메인
+        </Link>
+      </header>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+          <button
+            type="button"
+            onClick={handlePrevMonth}
+            className="p-2 rounded-lg hover:bg-gray-100 text-gray-600"
+            aria-label="이전 달"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <span className="text-lg font-semibold text-gray-800">
+            {format(currentMonth, 'yyyy년 M월', { locale: ko })}
+          </span>
+          <button
+            type="button"
+            onClick={handleNextMonth}
+            className="p-2 rounded-lg hover:bg-gray-100 text-gray-600"
+            aria-label="다음 달"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="p-2 sm:p-4">
+          <div className="grid grid-cols-7 gap-0.5 sm:gap-1 text-center text-xs sm:text-sm">
+            {WEEKDAY_LABELS.map((label, i) => (
+              <div
+                key={label}
+                className={`py-2 font-medium ${i === 0 ? 'text-red-500' : i === 6 ? 'text-blue-500' : 'text-gray-600'}`}
+              >
+                {label}
+              </div>
+            ))}
+            {loading ? (
+              <div className="col-span-7 py-12 text-gray-400">로딩 중...</div>
+            ) : (
+              days.map((day) => {
+                const key = format(day, 'yyyy-MM-dd')
+                const count = countsByDate[key] ?? 0
+                const isCurrentMonth = isSameMonth(day, currentMonth)
+                const isFull = count >= MAX_OFFERS_PER_DAY
+                const isNearFull = count === MAX_OFFERS_PER_DAY - 1
+                const isClickable = isCurrentMonth && !isFull
+
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    disabled={!isClickable}
+                    onClick={() => handleCellClick(day)}
+                    className={`
+                      min-h-[64px] sm:min-h-[80px] rounded-lg flex flex-col items-center justify-center gap-0.5
+                      text-sm transition-colors
+                      ${!isCurrentMonth ? 'text-gray-300' : 'text-gray-800'}
+                      ${isFull ? 'bg-gray-200 cursor-not-allowed' : ''}
+                      ${isClickable ? 'hover:bg-sky-50 hover:ring-1 hover:ring-sky-200 active:bg-sky-100' : ''}
+                      ${!isClickable && !isFull && isCurrentMonth ? 'bg-white' : ''}
+                    `}
+                  >
+                    <span className="font-medium">{format(day, 'd')}</span>
+                    {isFull ? (
+                      <span className="text-xs font-medium text-gray-500">마감</span>
+                    ) : (
+                      <span
+                        className={`
+                          inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium
+                          ${isNearFull ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-700'}
+                        `}
+                      >
+                        {count}/{MAX_OFFERS_PER_DAY}
+                      </span>
+                    )}
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {modalOpen && selectedDate && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4"
+          onClick={handleCloseModal}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-title"
+        >
+          <div
+            className="bg-white w-full max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl shadow-xl max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3">
+              <h2 id="modal-title" className="text-lg font-semibold text-gray-800">
+                {format(selectedDate, 'yyyy년 M월 d일', { locale: ko })} 혜택 신청
+              </h2>
+              <button
+                type="button"
+                onClick={handleCloseModal}
+                className="absolute top-3 right-4 p-1 rounded-lg hover:bg-gray-100 text-gray-500"
+                aria-label="닫기"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <form onSubmit={handleSubmit} className="p-4 space-y-4">
+              {error && (
+                <div className="rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2">
+                  {error}
+                </div>
+              )}
+              <div>
+                <label htmlFor="admin_store_name" className="block text-sm font-medium text-gray-700 mb-1">
+                  가게명
+                </label>
+                <input
+                  id="admin_store_name"
+                  type="text"
+                  value={form.store_name}
+                  onChange={(e) => setForm((f) => ({ ...f, store_name: e.target.value }))}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                  placeholder="가게 이름을 입력하세요"
+                  autoComplete="organization"
+                />
+              </div>
+              <div>
+                <label htmlFor="admin_description" className="block text-sm font-medium text-gray-700 mb-1">
+                  혜택 내용
+                </label>
+                <textarea
+                  id="admin_description"
+                  rows={3}
+                  value={form.description}
+                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 resize-none"
+                  placeholder="예: 커피 1잔 무료"
+                />
+              </div>
+              <div>
+                <label htmlFor="admin_total_qty" className="block text-sm font-medium text-gray-700 mb-1">
+                  수량
+                </label>
+                <input
+                  id="admin_total_qty"
+                  type="number"
+                  min={1}
+                  value={form.total_qty}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/\D/g, '')
+                    setForm((f) => ({ ...f, total_qty: v }))
+                  }}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                  placeholder="숫자만 입력"
+                />
+              </div>
+              <div>
+                <label htmlFor="admin_address" className="block text-sm font-medium text-gray-700 mb-1">
+                  주소
+                </label>
+                <input
+                  id="admin_address"
+                  type="text"
+                  value={form.address}
+                  onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                  placeholder="가게 주소를 입력하세요"
+                  autoComplete="street-address"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  사진 첨부 (최대 {MAX_IMAGES}장)
+                </label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleFileChange}
+                  className="block w-full text-sm text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-sky-50 file:px-3 file:py-2 file:text-sky-700 file:font-medium"
+                />
+                {selectedFiles.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {selectedFiles.map((file, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700"
+                      >
+                        <span className="max-w-[120px] truncate">{file.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeFile(i)}
+                          className="shrink-0 rounded p-0.5 text-red-500 hover:bg-red-50"
+                          aria-label="제거"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleCloseModal}
+                  className="flex-1 py-2.5 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2.5 rounded-lg bg-sky-600 text-white font-medium hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {submitting ? '처리 중...' : '신청하기'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

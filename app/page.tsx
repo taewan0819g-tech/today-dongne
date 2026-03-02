@@ -1,0 +1,470 @@
+'use client'
+
+import { useCallback, useEffect, useState } from 'react'
+import { format } from 'date-fns'
+import { ko } from 'date-fns/locale'
+import Image from 'next/image'
+import { useRouter } from 'next/navigation'
+import { getSupabase } from '@/lib/supabase/client'
+
+type OfferRow = {
+  id: string
+  target_date: string
+  store_name: string
+  description: string
+  total_qty: number
+  remain_qty: number
+  address: string
+  image_urls: string[] | null
+}
+
+const DAILY_COUPON_STATUS_KEY = 'daily_coupon_status'
+type DailyCouponStatus = { claimDate: string; offerId: string; issuedNumber: number }
+
+function getToday(): string {
+  return format(new Date(), 'yyyy-MM-dd')
+}
+
+function loadDailyStatus(): DailyCouponStatus | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(DAILY_COUPON_STATUS_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+    const { claimDate, offerId, issuedNumber } = parsed as Record<string, unknown>
+    if (typeof claimDate !== 'string' || typeof offerId !== 'string' || typeof issuedNumber !== 'number') return null
+    const today = getToday()
+    if (claimDate !== today) {
+      window.localStorage.removeItem(DAILY_COUPON_STATUS_KEY)
+      return null
+    }
+    return { claimDate, offerId, issuedNumber }
+  } catch {
+    return null
+  }
+}
+
+function saveDailyStatus(data: DailyCouponStatus): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(DAILY_COUPON_STATUS_KEY, JSON.stringify(data))
+  } catch {
+    // ignore
+  }
+}
+
+export default function Home() {
+  const router = useRouter()
+  const [offers, setOffers] = useState<OfferRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [claimingId, setClaimingId] = useState<string | null>(null)
+  const [dailyStatus, setDailyStatus] = useState<DailyCouponStatus | null>(null)
+  const [ticketModal, setTicketModal] = useState<{
+    claimNo: number
+    store_name: string
+    description: string
+  } | null>(null)
+  const [liveTime, setLiveTime] = useState(() => new Date())
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+  const [adminPassword, setAdminPassword] = useState('')
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null)
+  const selectedOffer = selectedOfferId
+    ? offers.find((o) => o.id === selectedOfferId) ?? null
+    : null
+
+  const fetchTodayOffers = useCallback(async () => {
+    const supabase = getSupabase()
+    if (!supabase) return
+    const today = getToday()
+    const { data, error } = await supabase
+      .from('daily_offers')
+      .select('id, target_date, store_name, description, total_qty, remain_qty, address, image_urls')
+      .eq('target_date', today)
+      .order('created_at', { ascending: true })
+      .limit(5)
+
+    if (error) {
+      console.error(error)
+      setOffers([])
+      return
+    }
+    setOffers((data as OfferRow[]) ?? [])
+  }, [])
+
+  useEffect(() => {
+    fetchTodayOffers().finally(() => setLoading(false))
+  }, [fetchTodayOffers])
+
+  useEffect(() => {
+    setDailyStatus(loadDailyStatus())
+  }, [])
+
+  useEffect(() => {
+    if (
+      selectedOfferId &&
+      !offers.some((o) => o.id === selectedOfferId)
+    ) {
+      setSelectedOfferId(null)
+    }
+  }, [offers, selectedOfferId])
+
+  useEffect(() => {
+    if (!ticketModal) return
+    const timer = setInterval(() => setLiveTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [ticketModal])
+
+  useEffect(() => {
+    const supabase = getSupabase()
+    if (!supabase) return
+    const channel = supabase
+      .channel('daily_offers_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'daily_offers' },
+        () => {
+          fetchTodayOffers()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [fetchTodayOffers])
+
+  const handleClaim = async (offerId: string) => {
+    const supabase = getSupabase()
+    if (!supabase) return
+    setClaimingId(offerId)
+    const { data, error } = await (supabase as any).rpc('claim_coupon', {
+      offer_id: offerId,
+    })
+    console.log('발급 결과:', data, error)
+    setClaimingId(null)
+
+    if (error) {
+      console.error(error)
+      alert('이미 마감되었거나 발급 중 오류가 발생했습니다.')
+      return
+    }
+    const claimNo = typeof data === 'number' ? data : 0
+    if (claimNo <= 0) {
+      alert('이미 마감되었거나 발급 중 오류가 발생했습니다.')
+      return
+    }
+    const offer = offers.find((o) => o.id === offerId)
+    const today = getToday()
+    const next: DailyCouponStatus = { claimDate: today, offerId, issuedNumber: claimNo }
+    saveDailyStatus(next)
+    setDailyStatus(next)
+    setTicketModal({
+      claimNo,
+      store_name: offer?.store_name ?? '',
+      description: offer?.description ?? '',
+    })
+    setLiveTime(new Date())
+    fetchTodayOffers()
+  }
+
+  const handleShowMyTicket = (offer: OfferRow) => {
+    if (!dailyStatus || dailyStatus.offerId !== offer.id) return
+    setTicketModal({
+      claimNo: dailyStatus.issuedNumber,
+      store_name: offer.store_name,
+      description: offer.description,
+    })
+    setLiveTime(new Date())
+  }
+
+  const today = getToday()
+  const hasClaimedToday = dailyStatus !== null && dailyStatus.claimDate === today
+  const isMyClaimedOffer = (offerId: string) => hasClaimedToday && dailyStatus!.offerId === offerId
+
+  const handleAdminSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    setPasswordError(null)
+    const expected = process.env.NEXT_PUBLIC_OWNER_PASSWORD ?? ''
+    if (adminPassword === expected) {
+      setShowPasswordModal(false)
+      setAdminPassword('')
+      router.push('/admin')
+      return
+    }
+    setPasswordError('비밀번호가 일치하지 않습니다.')
+  }
+
+  return (
+    <main className="min-h-screen flex flex-col pb-24">
+      <header className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 px-4 py-3">
+        <div className="flex items-center justify-center sm:justify-start">
+          <Image
+            src="/logo.png"
+            alt="오늘동네"
+            width={160}
+            height={44}
+            className="h-11 w-auto object-contain"
+            priority
+          />
+        </div>
+        <p className="text-sm text-gray-500 mt-0.5">
+          {format(new Date(), 'M월 d일 (EEE)', { locale: ko })} 오늘의 혜택
+        </p>
+      </header>
+
+      <div className="flex-1 px-4 py-4">
+        {selectedOffer ? (
+          /* 상세 화면 (Conditional Rendering, 라우팅 없음) */
+          <div className="flex flex-col min-h-[calc(100vh-8rem)] pb-20">
+            <div className="flex items-center gap-2 border-b border-gray-200 pb-3 mb-4">
+              <button
+                type="button"
+                onClick={() => setSelectedOfferId(null)}
+                className="flex-shrink-0 p-2 -ml-2 rounded-lg hover:bg-gray-200 text-gray-700"
+                aria-label="뒤로가기"
+              >
+                <span className="text-xl font-bold">&lt;</span>
+              </button>
+              <span className="text-sm text-gray-500">내용보기</span>
+            </div>
+
+            {selectedOffer.image_urls && selectedOffer.image_urls.length > 0 && (
+              <div className="w-full overflow-x-auto snap-x snap-mandatory flex gap-0 -mx-4 mb-4">
+                {selectedOffer.image_urls.map((url, i) => (
+                  <div
+                    key={i}
+                    className="flex-shrink-0 w-full max-w-full aspect-[4/3] snap-center bg-gray-100"
+                  >
+                    <img
+                      src={url}
+                      alt={`${selectedOffer.store_name} ${i + 1}`}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex-1 space-y-4">
+              <h2 className="text-xl font-bold text-gray-900">{selectedOffer.store_name}</h2>
+              <p className="text-base text-gray-700 leading-relaxed whitespace-pre-wrap">
+                {selectedOffer.description}
+              </p>
+              <p className="text-sm text-gray-600">{selectedOffer.address}</p>
+              <p className="text-sm text-gray-500">
+                남은 수량: {selectedOffer.remain_qty}개 / 전체 {selectedOffer.total_qty}개
+              </p>
+            </div>
+
+            <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-gray-50 border-t border-gray-200">
+              {isMyClaimedOffer(selectedOffer.id) ? (
+                <button
+                  type="button"
+                  onClick={() => handleShowMyTicket(selectedOffer)}
+                  className="w-full py-3 rounded-xl bg-emerald-500 text-white font-medium hover:bg-emerald-600 active:bg-emerald-700"
+                >
+                  🎫 내 티켓 보기
+                </button>
+              ) : hasClaimedToday ? (
+                <span className="block w-full py-3 rounded-xl bg-gray-200 text-gray-500 text-center font-medium">
+                  오늘 혜택 수령 완료
+                </span>
+              ) : selectedOffer.remain_qty <= 0 ? (
+                <span className="block w-full py-3 rounded-xl bg-gray-200 text-gray-500 text-center font-medium">
+                  마감
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={claimingId === selectedOffer.id}
+                  onClick={() => handleClaim(selectedOffer.id)}
+                  className="w-full py-3 rounded-xl bg-sky-600 text-white font-medium hover:bg-sky-700 active:bg-sky-800 disabled:opacity-50"
+                >
+                  {claimingId === selectedOffer.id ? '처리 중...' : '선택 (쿠폰 받기)'}
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            {loading ? (
+              <div className="py-12 text-center text-gray-500 text-sm">로딩 중...</div>
+            ) : offers.length === 0 ? (
+              <div className="py-12 text-center text-gray-500 text-sm">
+                오늘 등록된 혜택이 없습니다.
+              </div>
+            ) : (
+              <ul className="space-y-3">
+                {offers.map((offer) => {
+                  const soldOut = offer.remain_qty <= 0
+                  return (
+                    <li
+                      key={offer.id}
+                      className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
+                    >
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-gray-900 truncate">{offer.store_name}</p>
+                          <p className="text-sm text-gray-700 mt-0.5">{offer.description}</p>
+                          <p className="text-xs text-gray-500 mt-1">{offer.address}</p>
+                          <p className="text-xs text-gray-600 mt-2">
+                            남은 수량: {offer.remain_qty}개 / 전체 {offer.total_qty}개
+                          </p>
+                        </div>
+                        <div className="flex-shrink-0 pt-2 sm:pt-0 sm:pl-2 flex flex-wrap gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedOfferId(offer.id)}
+                            className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50"
+                          >
+                            내용보기
+                          </button>
+                          {isMyClaimedOffer(offer.id) ? (
+                            <button
+                              type="button"
+                              onClick={() => handleShowMyTicket(offer)}
+                              className="min-w-[100px] px-4 py-2 rounded-lg bg-emerald-500 text-white text-sm font-medium hover:bg-emerald-600 active:bg-emerald-700"
+                            >
+                              🎫 내 티켓 보기
+                            </button>
+                          ) : hasClaimedToday ? (
+                            <span className="inline-block min-w-[120px] px-4 py-2 rounded-lg bg-gray-200 text-gray-500 text-sm font-medium cursor-not-allowed text-center">
+                              오늘 혜택 수령 완료
+                            </span>
+                          ) : soldOut ? (
+                            <span className="inline-block px-4 py-2 rounded-lg bg-gray-200 text-gray-500 text-sm font-medium cursor-not-allowed text-center">
+                              마감
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={claimingId === offer.id}
+                              onClick={() => handleClaim(offer.id)}
+                              className="min-w-[72px] px-4 py-2 rounded-lg bg-sky-600 text-white text-sm font-medium hover:bg-sky-700 active:bg-sky-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {claimingId === offer.id ? '처리 중...' : '선택'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+
+            {/* 스크롤 맨 밑: 사장님 혜택 신청 */}
+            <div className="mt-12 pb-8 text-center">
+              <button
+                type="button"
+                onClick={() => setShowPasswordModal(true)}
+                className="text-gray-400 hover:text-gray-500 text-xs"
+              >
+                사장님 혜택 신청하기
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 비밀번호 모달 */}
+      {showPasswordModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => {
+            setShowPasswordModal(false)
+            setPasswordError(null)
+            setAdminPassword('')
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-900 mb-3">관리자 확인</h2>
+            <form onSubmit={handleAdminSubmit}>
+              <input
+                type="password"
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                placeholder="비밀번호"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                autoFocus
+              />
+              {passwordError && (
+                <p className="mt-2 text-sm text-red-600">{passwordError}</p>
+              )}
+              <div className="flex gap-2 mt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPasswordModal(false)
+                    setAdminPassword('')
+                    setPasswordError(null)
+                  }}
+                  className="flex-1 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 rounded-lg bg-sky-600 text-white text-sm font-medium"
+                >
+                  확인
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 쿠폰 발급 완료 모달 (티켓) - 캡처 방지·실시간 타이머·발급 번호 강조 */}
+      {ticketModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setTicketModal(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="relative w-full max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl ring-2 ring-amber-400/80 ticket-shimmer"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="select-none pointer-events-none p-6 pb-4 text-center">
+              <p className="text-sm font-medium text-gray-500 tabular-nums">
+                {format(liveTime, 'yyyy.MM.dd HH:mm:ss')}
+              </p>
+              <p className="mt-4 text-lg font-bold text-orange-600">
+                이 카드를 사장님에게 보여주세요
+              </p>
+              {ticketModal.store_name && (
+                <p className="mt-3 text-base font-semibold text-gray-900">
+                  {ticketModal.store_name}
+                </p>
+              )}
+              {ticketModal.description && (
+                <p className="mt-1 text-sm text-gray-600">{ticketModal.description}</p>
+              )}
+              <p className="mt-6 text-5xl font-extrabold tracking-tight text-sky-600">
+                발급 번호: {ticketModal.claimNo}번
+              </p>
+            </div>
+            <div className="pointer-events-auto border-t border-gray-200 bg-gray-50 p-4">
+              <button
+                type="button"
+                onClick={() => setTicketModal(null)}
+                className="w-full py-3.5 rounded-xl bg-sky-600 text-white text-base font-semibold hover:bg-sky-700 active:bg-sky-800"
+              >
+                확인 완료 / 닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  )
+}

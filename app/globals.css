@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground: #0f172a;
+  --background: #f8fafc;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+}
+
+@keyframes ticket-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.ticket-shimmer {
+  position: relative;
+}
+
+.ticket-shimmer::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 35%,
+    rgba(251, 191, 36, 0.5) 50%,
+    transparent 65%,
+    transparent 100%
+  );
+  background-size: 50% 100%;
+  background-position: 200% 0;
+  animation: ticket-shimmer 2.5s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ticket-shimmer > * {
+  position: relative;
+  z-index: 1;
+}
