@@ -5,7 +5,10 @@ import { format } from 'date-fns'
 import { ko } from 'date-fns/locale'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
+import { QRCodeSVG } from 'qrcode.react'
 import { getSupabase } from '@/lib/supabase/client'
+import { haversineDistance, formatDistance, getAddressFromCoords } from '@/lib/kakao-map'
+import KakaoMapView from '@/components/KakaoMapView'
 
 type OfferRow = {
   id: string
@@ -15,6 +18,8 @@ type OfferRow = {
   total_qty: number
   remain_qty: number
   address: string
+  lat: number | null
+  lng: number | null
   image_urls: string[] | null
 }
 
@@ -70,6 +75,14 @@ export default function Home() {
   const [adminPassword, setAdminPassword] = useState('')
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null)
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [locationLabel, setLocationLabel] = useState<string | null>(null)
+  /** 'denied' = 권한 거부, 'unavailable' = 위치 조회 실패/타임아웃 */
+  const [locationError, setLocationError] = useState<'denied' | 'unavailable' | null>(null)
+  const [locationRefreshLoading, setLocationRefreshLoading] = useState(false)
+  const [distances, setDistances] = useState<Record<string, number>>({})
+  const [showQrModal, setShowQrModal] = useState(false)
+  const [shareOrigin, setShareOrigin] = useState('')
   const selectedOffer = selectedOfferId
     ? offers.find((o) => o.id === selectedOfferId) ?? null
     : null
@@ -80,7 +93,7 @@ export default function Home() {
     const today = getToday()
     const { data, error } = await supabase
       .from('daily_offers')
-      .select('id, target_date, store_name, description, total_qty, remain_qty, address, image_urls')
+      .select('id, target_date, store_name, description, total_qty, remain_qty, address, lat, lng, image_urls')
       .eq('target_date', today)
       .order('created_at', { ascending: true })
       .limit(5)
@@ -100,6 +113,53 @@ export default function Home() {
   useEffect(() => {
     setDailyStatus(loadDailyStatus())
   }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') setShareOrigin(window.location.origin)
+  }, [])
+
+  const fetchLocation = useCallback(() => {
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      setLocationError('unavailable')
+      return
+    }
+    setLocationError(null)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+        setUserLocation(coords)
+        setLocationError(null)
+        getAddressFromCoords(coords.lat, coords.lng).then((addr) => {
+          setLocationLabel(addr ?? '주소를 가져올 수 없습니다')
+        })
+      },
+      (err: GeolocationPositionError) => {
+        setUserLocation(null)
+        setLocationLabel(null)
+        if (err.code === 1) {
+          setLocationError('denied')
+        } else {
+          setLocationError('unavailable')
+        }
+      },
+      { enableHighAccuracy: false, timeout: 5000, maximumAge: 300000 }
+    )
+  }, [])
+
+  useEffect(() => {
+    fetchLocation()
+  }, [fetchLocation])
+
+  useEffect(() => {
+    if (!userLocation || offers.length === 0) return
+    const next: Record<string, number> = {}
+    offers.forEach((offer) => {
+      if (offer.lat != null && offer.lng != null) {
+        next[offer.id] = haversineDistance(userLocation, { lat: offer.lat, lng: offer.lng })
+      }
+    })
+    setDistances((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+  }, [userLocation, offers])
 
   useEffect(() => {
     if (
@@ -134,6 +194,35 @@ export default function Home() {
       supabase.removeChannel(channel)
     }
   }, [fetchTodayOffers])
+
+  const handleRefreshLocation = useCallback(() => {
+    setLocationRefreshLoading(true)
+    setLocationError(null)
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      setLocationError('unavailable')
+      setLocationRefreshLoading(false)
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+        setUserLocation(coords)
+        setLocationError(null)
+        getAddressFromCoords(coords.lat, coords.lng).then((addr) => {
+          setLocationLabel(addr ?? '주소를 가져올 수 없습니다')
+          setLocationRefreshLoading(false)
+        })
+      },
+      (err: GeolocationPositionError) => {
+        setUserLocation(null)
+        setLocationLabel(null)
+        if (err.code === 1) setLocationError('denied')
+        else setLocationError('unavailable')
+        setLocationRefreshLoading(false)
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    )
+  }, [])
 
   const handleClaim = async (offerId: string) => {
     const supabase = getSupabase()
@@ -199,20 +288,53 @@ export default function Home() {
   return (
     <main className="min-h-screen flex flex-col pb-24">
       <header className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-center sm:justify-start">
-          <Image
-            src="/logo.png"
-            alt="오늘동네"
-            width={160}
-            height={44}
-            className="h-11 w-auto object-contain"
-            priority
-          />
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col min-w-0">
+            <div className="flex items-center justify-center sm:justify-start">
+              <Image
+                src="/logo.png"
+                alt="오늘동네"
+                width={160}
+                height={44}
+                className="h-11 w-auto object-contain"
+                priority
+              />
+            </div>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {format(new Date(), 'M월 d일 (EEE)', { locale: ko })} 오늘의 혜택
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowQrModal(true)}
+            className="flex-shrink-0 px-3 py-2 rounded-lg bg-sky-100 text-sky-700 text-sm font-medium hover:bg-sky-200 active:bg-sky-300"
+          >
+            📱 QR로 공유하기
+          </button>
         </div>
-        <p className="text-sm text-gray-500 mt-0.5">
-          {format(new Date(), 'M월 d일 (EEE)', { locale: ko })} 오늘의 혜택
-        </p>
       </header>
+
+      {/* 현재 위치 + 위치 초기화 */}
+      <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex flex-wrap items-center gap-2">
+        <span className="text-sm text-gray-600">
+          📍 현재 위치:{' '}
+          <span className={`font-medium ${locationError ? 'text-amber-600' : 'text-gray-900'}`}>
+            {locationError === 'denied'
+              ? '위치 권한을 허용해 주세요'
+              : locationError === 'unavailable'
+                ? '위치를 찾을 수 없습니다'
+                : locationLabel ?? (userLocation ? '변환 중...' : '확인 중...')}
+          </span>
+        </span>
+        <button
+          type="button"
+          onClick={handleRefreshLocation}
+          disabled={locationRefreshLoading}
+          className="ml-auto text-xs px-3 py-1.5 rounded-lg bg-sky-100 text-sky-700 font-medium hover:bg-sky-200 active:bg-sky-300 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {locationRefreshLoading ? '위치 확인 중...' : '위치 초기화(새로고침)'}
+        </button>
+      </div>
 
       <div className="flex-1 px-4 py-4">
         {selectedOffer ? (
@@ -253,6 +375,17 @@ export default function Home() {
                 {selectedOffer.description}
               </p>
               <p className="text-sm text-gray-600">{selectedOffer.address}</p>
+              {typeof distances[selectedOffer.id] === 'number' && (
+                <p className="text-sm text-sky-600 font-medium">
+                  {distances[selectedOffer.id] < 1 ? '🚶‍♂️' : '🚗'} {formatDistance(distances[selectedOffer.id])}
+                </p>
+              )}
+              <KakaoMapView
+                address={selectedOffer.address}
+                storeName={selectedOffer.store_name}
+                height="200px"
+                className="mt-2"
+              />
               <p className="text-sm text-gray-500">
                 남은 수량: {selectedOffer.remain_qty}개 / 전체 {selectedOffer.total_qty}개
               </p>
@@ -309,9 +442,16 @@ export default function Home() {
                           <p className="font-bold text-gray-900 truncate">{offer.store_name}</p>
                           <p className="text-sm text-gray-700 mt-0.5">{offer.description}</p>
                           <p className="text-xs text-gray-500 mt-1">{offer.address}</p>
-                          <p className="text-xs text-gray-600 mt-2">
-                            남은 수량: {offer.remain_qty}개 / 전체 {offer.total_qty}개
-                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            {typeof distances[offer.id] === 'number' && (
+                              <span className="text-xs text-sky-600 font-medium">
+                                {distances[offer.id] < 1 ? '🚶‍♂️' : '🚗'} {formatDistance(distances[offer.id])}
+                              </span>
+                            )}
+                            <p className="text-xs text-gray-600">
+                              남은 수량: {offer.remain_qty}개 / 전체 {offer.total_qty}개
+                            </p>
+                          </div>
                         </div>
                         <div className="flex-shrink-0 pt-2 sm:pt-0 sm:pl-2 flex flex-wrap gap-2 justify-end">
                           <button
@@ -418,6 +558,42 @@ export default function Home() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* QR 코드 공유 모달 */}
+      {showQrModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowQrModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="QR 코드로 앱 공유"
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-xs p-6 flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-900 mb-1">앱 공유하기</h2>
+            <p className="text-sm text-gray-500 mb-4">QR 코드를 스캔하면 이 주소로 접속해요</p>
+            {shareOrigin ? (
+              <div className="bg-white p-3 rounded-xl border border-gray-200 inline-block">
+                <QRCodeSVG value={shareOrigin} size={220} level="M" />
+              </div>
+            ) : (
+              <div className="w-[220px] h-[220px] bg-gray-100 rounded-xl flex items-center justify-center text-gray-400 text-sm">
+                로딩 중...
+              </div>
+            )}
+            <p className="mt-3 text-xs text-gray-400 break-all max-w-full px-2">{shareOrigin || '-'}</p>
+            <button
+              type="button"
+              onClick={() => setShowQrModal(false)}
+              className="mt-5 w-full py-3 rounded-xl bg-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-300 active:bg-gray-400"
+            >
+              닫기
+            </button>
           </div>
         </div>
       )}

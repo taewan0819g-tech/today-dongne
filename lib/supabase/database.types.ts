@@ -18,6 +18,8 @@ export interface Database {
           total_qty: number
           remain_qty: number
           address: string
+          lat: number | null
+          lng: number | null
           image_urls: string[] | null
           created_at: string
         }
@@ -29,6 +31,8 @@ export interface Database {
           total_qty: number
           remain_qty?: number
           address: string
+          lat?: number | null
+          lng?: number | null
           image_urls?: string[] | null
           created_at?: string
         }
@@ -40,6 +44,8 @@ export interface Database {
           total_qty?: number
           remain_qty?: number
           address?: string
+          lat?: number | null
+          lng?: number | null
           image_urls?: string[] | null
           created_at?: string
         }

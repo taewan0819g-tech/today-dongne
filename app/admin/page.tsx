@@ -17,9 +17,49 @@ import {
 import { ko } from 'date-fns/locale'
 import { getSupabase } from '@/lib/supabase/client'
 import type { DailyOfferInsert } from '@/lib/supabase/database.types'
+import { getCoordsFromAddress } from '@/lib/kakao-map'
 
 const MAX_OFFERS_PER_DAY = 5
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토']
+
+const ADMIN_SHOP_INFO_KEY = 'admin_shop_info'
+type AdminShopInfo = { store_name: string; address: string }
+
+function loadAdminShopInfo(): AdminShopInfo | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(ADMIN_SHOP_INFO_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const { store_name, address } = parsed as Record<string, unknown>
+    if (typeof store_name !== 'string' || typeof address !== 'string') return null
+    return { store_name, address }
+  } catch {
+    return null
+  }
+}
+
+function saveAdminShopInfo(data: AdminShopInfo): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(ADMIN_SHOP_INFO_KEY, JSON.stringify(data))
+  } catch {
+    // ignore
+  }
+}
+
+type AdminOfferRow = {
+  id: string
+  store_name: string
+  description: string
+  address: string
+  total_qty: number
+  remain_qty: number
+  lat: number | null
+  lng: number | null
+  image_urls: string[] | null
+}
 
 export default function AdminPage() {
   const [currentMonth, setCurrentMonth] = useState(new Date())
@@ -27,6 +67,8 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true)
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
+  const [offersForSelectedDate, setOffersForSelectedDate] = useState<AdminOfferRow[]>([])
+  const [editingOfferId, setEditingOfferId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState({
     store_name: '',
@@ -116,13 +158,46 @@ export default function AdminPage() {
   const handlePrevMonth = () => setCurrentMonth((m) => subMonths(m, 1))
   const handleNextMonth = () => setCurrentMonth((m) => addMonths(m, 1))
 
+  const fetchOffersForDate = useCallback(
+    async (date: Date) => {
+      const supabase = getSupabase()
+      if (!supabase) return
+      const dateStr = format(date, 'yyyy-MM-dd')
+      const { data, error: fetchErr } = await supabase
+        .from('daily_offers')
+        .select('id, store_name, description, address, total_qty, remain_qty, lat, lng, image_urls')
+        .eq('target_date', dateStr)
+        .order('created_at', { ascending: true })
+      if (fetchErr) {
+        setOffersForSelectedDate([])
+        return
+      }
+      setOffersForSelectedDate((data as AdminOfferRow[]) ?? [])
+    },
+    []
+  )
+
+  useEffect(() => {
+    if (modalOpen && selectedDate) {
+      fetchOffersForDate(selectedDate)
+    } else {
+      setOffersForSelectedDate([])
+      setEditingOfferId(null)
+    }
+  }, [modalOpen, selectedDate, fetchOffersForDate])
+
   const handleCellClick = (day: Date) => {
-    const key = format(day, 'yyyy-MM-dd')
-    const count = countsByDate[key] ?? 0
-    if (count >= MAX_OFFERS_PER_DAY) return
+    if (!isSameMonth(day, currentMonth)) return
     setSelectedDate(day)
-    setForm({ store_name: '', description: '', total_qty: '', address: '' })
+    const saved = loadAdminShopInfo()
+    setForm({
+      store_name: saved?.store_name ?? '',
+      description: '',
+      total_qty: '',
+      address: saved?.address ?? '',
+    })
     setSelectedFiles([])
+    setEditingOfferId(null)
     setError(null)
     setModalOpen(true)
   }
@@ -131,6 +206,36 @@ export default function AdminPage() {
     setModalOpen(false)
     setSelectedDate(null)
     setSelectedFiles([])
+    setEditingOfferId(null)
+    setError(null)
+  }
+
+  const handleEditClick = (offer: AdminOfferRow) => {
+    setEditingOfferId(offer.id)
+    setForm({
+      store_name: offer.store_name,
+      description: offer.description,
+      total_qty: String(offer.total_qty),
+      address: offer.address,
+    })
+    setSelectedFiles([])
+    setError(null)
+  }
+
+  const handleDeleteClick = async (offer: AdminOfferRow) => {
+    if (!confirm('정말 삭제하시겠습니까?')) return
+    const supabase = getSupabase()
+    if (!supabase) return
+    const { error: deleteError } = await supabase
+      .from('daily_offers')
+      .delete()
+      .eq('id', offer.id)
+    if (deleteError) {
+      setError(deleteError.message || '삭제에 실패했습니다.')
+      return
+    }
+    await fetchOffersForDate(selectedDate!)
+    await fetchCountsForMonth(currentMonth)
     setError(null)
   }
 
@@ -184,6 +289,39 @@ export default function AdminPage() {
       return
     }
 
+    const isEdit = editingOfferId !== null
+
+    if (isEdit) {
+      const existing = offersForSelectedDate.find((o) => o.id === editingOfferId)
+      const newRemainQty = existing
+        ? Math.min(existing.remain_qty, qty)
+        : qty
+      const coords = await getCoordsFromAddress(address)
+      const { error: updateError } = await (supabase as any)
+        .from('daily_offers')
+        .update({
+          store_name,
+          description,
+          address,
+          total_qty: qty,
+          remain_qty: newRemainQty,
+          lat: coords?.lat ?? null,
+          lng: coords?.lng ?? null,
+        })
+        .eq('id', editingOfferId)
+      setSubmitting(false)
+      if (updateError) {
+        setError(updateError.message || '수정에 실패했습니다.')
+        return
+      }
+      await fetchOffersForDate(selectedDate)
+      await fetchCountsForMonth(currentMonth)
+      setEditingOfferId(null)
+      setForm({ store_name: '', description: '', total_qty: '', address: '' })
+      setSelectedFiles([])
+      return
+    }
+
     let imageUrls: string[] = []
     if (selectedFiles.length > 0) {
       try {
@@ -205,12 +343,16 @@ export default function AdminPage() {
       }
     }
 
+    const coords = await getCoordsFromAddress(address)
     const payload: DailyOfferInsert = {
       target_date: format(selectedDate, 'yyyy-MM-dd'),
       store_name,
       description,
       total_qty: qty,
+      remain_qty: qty,
       address,
+      lat: coords?.lat ?? null,
+      lng: coords?.lng ?? null,
       image_urls: imageUrls.length > 0 ? imageUrls : null,
     }
 
@@ -222,8 +364,18 @@ export default function AdminPage() {
       return
     }
 
+    saveAdminShopInfo({ store_name, address })
+
+    await fetchOffersForDate(selectedDate)
     await fetchCountsForMonth(currentMonth)
-    handleCloseModal()
+    const saved = loadAdminShopInfo()
+    setForm({
+      store_name: saved?.store_name ?? '',
+      description: '',
+      total_qty: '',
+      address: saved?.address ?? '',
+    })
+    setSelectedFiles([])
   }
 
   return (
@@ -300,7 +452,7 @@ export default function AdminPage() {
                 const isCurrentMonth = isSameMonth(day, currentMonth)
                 const isFull = count >= MAX_OFFERS_PER_DAY
                 const isNearFull = count === MAX_OFFERS_PER_DAY - 1
-                const isClickable = isCurrentMonth && !isFull
+                const isClickable = isCurrentMonth
 
                 return (
                   <button
@@ -312,9 +464,9 @@ export default function AdminPage() {
                       min-h-[64px] sm:min-h-[80px] rounded-lg flex flex-col items-center justify-center gap-0.5
                       text-sm transition-colors
                       ${!isCurrentMonth ? 'text-gray-300' : 'text-gray-800'}
-                      ${isFull ? 'bg-gray-200 cursor-not-allowed' : ''}
+                      ${isFull ? 'bg-gray-100' : ''}
                       ${isClickable ? 'hover:bg-sky-50 hover:ring-1 hover:ring-sky-200 active:bg-sky-100' : ''}
-                      ${!isClickable && !isFull && isCurrentMonth ? 'bg-white' : ''}
+                      ${isClickable && !isFull ? 'bg-white' : ''}
                     `}
                   >
                     <span className="font-medium">{format(day, 'd')}</span>
@@ -352,7 +504,7 @@ export default function AdminPage() {
           >
             <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3">
               <h2 id="modal-title" className="text-lg font-semibold text-gray-800">
-                {format(selectedDate, 'yyyy년 M월 d일', { locale: ko })} 혜택 신청
+                {format(selectedDate, 'yyyy년 M월 d일', { locale: ko })} 혜택
               </h2>
               <button
                 type="button"
@@ -365,7 +517,56 @@ export default function AdminPage() {
                 </svg>
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="p-4 space-y-4">
+            <div className="p-4">
+              {offersForSelectedDate.length > 0 && (
+                <div className="mb-5">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2">
+                    등록된 혜택 ({offersForSelectedDate.length}건)
+                  </h3>
+                  <ul className="space-y-2">
+                    {offersForSelectedDate.map((offer) => (
+                      <li
+                        key={offer.id}
+                        className={`rounded-lg border p-3 ${
+                          editingOfferId === offer.id
+                            ? 'border-sky-400 bg-sky-50/50'
+                            : 'border-gray-200 bg-gray-50/50'
+                        }`}
+                      >
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-gray-900 truncate">{offer.store_name}</p>
+                            <p className="text-sm text-gray-600 line-clamp-2 mt-0.5">{offer.description}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              남은 수량: {offer.remain_qty} / {offer.total_qty}
+                            </p>
+                          </div>
+                          <div className="flex gap-2 mt-2 sm:mt-0 sm:flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleEditClick(offer)}
+                              className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-100"
+                            >
+                              수정
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteClick(offer)}
+                              className="px-3 py-1.5 rounded-lg border border-red-200 text-red-600 text-sm font-medium hover:bg-red-50"
+                            >
+                              삭제(취소)
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <h3 className="text-sm font-medium text-gray-700 mb-3">
+                {editingOfferId ? '혜택 수정' : '새 혜택 등록'}
+              </h3>
+            <form onSubmit={handleSubmit} className="space-y-4">
               {error && (
                 <div className="rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2">
                   {error}
@@ -463,22 +664,48 @@ export default function AdminPage() {
                 )}
               </div>
               <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={handleCloseModal}
-                  className="flex-1 py-2.5 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
-                >
-                  취소
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="flex-1 py-2.5 rounded-lg bg-sky-600 text-white font-medium hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {submitting ? '처리 중...' : '신청하기'}
-                </button>
+                {editingOfferId ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingOfferId(null)
+                        setForm({ store_name: '', description: '', total_qty: '', address: '' })
+                        setSelectedFiles([])
+                      }}
+                      className="flex-1 py-2.5 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+                    >
+                      수정 취소
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="flex-1 py-2.5 rounded-lg bg-sky-600 text-white font-medium hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {submitting ? '저장 중...' : '저장'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleCloseModal}
+                      className="flex-1 py-2.5 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+                    >
+                      취소
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={submitting || offersForSelectedDate.length >= MAX_OFFERS_PER_DAY}
+                      className="flex-1 py-2.5 rounded-lg bg-sky-600 text-white font-medium hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {submitting ? '처리 중...' : '신청하기'}
+                    </button>
+                  </>
+                )}
               </div>
             </form>
+            </div>
           </div>
         </div>
       )}
