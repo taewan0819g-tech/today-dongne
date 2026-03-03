@@ -60,6 +60,7 @@ type AdminOfferRow = {
   description: string
   address: string
   detail_address: string | null
+  available_time: string | null
   total_qty: number
   remain_qty: number
   lat: number | null
@@ -84,6 +85,7 @@ export default function AdminPage() {
     total_qty: '',
     address: '',
     detail_address: '',
+    available_time: '',
   })
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -237,7 +239,7 @@ export default function AdminPage() {
       const dateStr = format(date, 'yyyy-MM-dd')
       const { data, error: fetchErr } = await supabase
         .from('daily_offers')
-        .select('id, store_name, description, address, detail_address, total_qty, remain_qty, lat, lng, image_urls')
+        .select('id, store_name, description, address, detail_address, available_time, total_qty, remain_qty, lat, lng, image_urls')
         .eq('target_date', dateStr)
         .eq('store_name', loggedInStoreName)
         .order('created_at', { ascending: true })
@@ -288,6 +290,7 @@ export default function AdminPage() {
       total_qty: '',
       address: saved?.address ?? '',
       detail_address: '',
+      available_time: '',
     })
     setSelectedFiles([])
     setEditingOfferId(null)
@@ -310,6 +313,7 @@ export default function AdminPage() {
       total_qty: String(offer.total_qty),
       address: offer.address,
       detail_address: offer.detail_address ?? '',
+      available_time: offer.available_time ?? '',
     })
     setSelectedFiles([])
     setError(null)
@@ -355,6 +359,7 @@ export default function AdminPage() {
     const total_qty = form.total_qty.trim()
     const address = form.address.trim()
     const detail_address = form.detail_address.trim() || null
+    const available_time = form.available_time.trim() || null
 
     if (!description) {
       setError('혜택 내용을 입력해 주세요.')
@@ -414,6 +419,7 @@ export default function AdminPage() {
         description,
         address,
         detail_address,
+        available_time,
         total_qty: qty,
         remain_qty: newRemainQty,
         lat: coords?.lat ?? null,
@@ -436,7 +442,7 @@ export default function AdminPage() {
       await fetchCountsForMonth(currentMonth)
       await fetchMyRegisteredDatesInMonth()
       setEditingOfferId(null)
-      setForm({ description: '', total_qty: '', address: '', detail_address: '' })
+      setForm({ description: '', total_qty: '', address: '', detail_address: '', available_time: '' })
       setSelectedFiles([])
       return
     }
@@ -451,6 +457,7 @@ export default function AdminPage() {
       remain_qty: qty,
       address,
       detail_address: detail_address ?? null,
+      available_time,
       lat: coords?.lat ?? null,
       lng: coords?.lng ?? null,
       image_urls: imageUrls.length > 0 ? imageUrls : null,
@@ -475,6 +482,7 @@ export default function AdminPage() {
       total_qty: '',
       address: saved?.address ?? '',
       detail_address: '',
+      available_time: '',
     })
     setSelectedFiles([])
   }
@@ -725,6 +733,19 @@ export default function AdminPage() {
                 />
               </div>
               <div>
+                <label htmlFor="admin_available_time" className="block text-sm font-medium text-gray-700 mb-1">
+                  이용 가능 시간 (선택)
+                </label>
+                <input
+                  id="admin_available_time"
+                  type="text"
+                  value={form.available_time}
+                  onChange={(e) => setForm((f) => ({ ...f, available_time: e.target.value }))}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 placeholder-gray-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                  placeholder="예: 오후 2시 ~ 5시, 브레이크타임 제외 등"
+                />
+              </div>
+              <div>
                 <label htmlFor="admin_address" className="block text-sm font-medium text-gray-700 mb-1">
                   주소
                 </label>
@@ -822,7 +843,7 @@ export default function AdminPage() {
                       type="button"
                       onClick={() => {
                         setEditingOfferId(null)
-                        setForm({ description: '', total_qty: '', address: '', detail_address: '' })
+                        setForm({ description: '', total_qty: '', address: '', detail_address: '', available_time: '' })
                         setSelectedFiles([])
                       }}
                       className="flex-1 py-2.5 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"

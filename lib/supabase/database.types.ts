@@ -24,6 +24,7 @@ export interface Database {
           remain_qty: number
           address: string
           detail_address: string | null
+          available_time: string | null
           lat: number | null
           lng: number | null
           image_urls: string[] | null
@@ -38,6 +39,7 @@ export interface Database {
           remain_qty?: number
           address: string
           detail_address?: string | null
+          available_time?: string | null
           lat?: number | null
           lng?: number | null
           image_urls?: string[] | null
@@ -52,6 +54,7 @@ export interface Database {
           remain_qty?: number
           address?: string
           detail_address?: string | null
+          available_time?: string | null
           lat?: number | null
           lng?: number | null
           image_urls?: string[] | null

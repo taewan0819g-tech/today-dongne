@@ -19,6 +19,7 @@ type OfferRow = {
   remain_qty: number
   address: string
   detail_address?: string | null
+  available_time?: string | null
   lat: number | null
   lng: number | null
   image_urls: string[] | null
@@ -70,6 +71,7 @@ export default function Home() {
     claimNo: number
     store_name: string
     description: string
+    available_time?: string | null
   } | null>(null)
   const [liveTime, setLiveTime] = useState(() => new Date())
   const [showOwnerModal, setShowOwnerModal] = useState(false)
@@ -95,7 +97,7 @@ export default function Home() {
     const today = getToday()
     const { data, error } = await supabase
       .from('daily_offers')
-      .select('id, target_date, store_name, description, total_qty, remain_qty, address, detail_address, lat, lng, image_urls')
+      .select('id, target_date, store_name, description, total_qty, remain_qty, address, detail_address, available_time, lat, lng, image_urls')
       .eq('target_date', today)
       .order('created_at', { ascending: true })
       .limit(5)
@@ -270,6 +272,7 @@ export default function Home() {
       claimNo,
       store_name: offer?.store_name ?? '',
       description: offer?.description ?? '',
+      available_time: offer?.available_time ?? null,
     })
     setLiveTime(new Date())
     fetchTodayOffers()
@@ -281,6 +284,7 @@ export default function Home() {
       claimNo: dailyStatus.issuedNumber,
       store_name: offer.store_name,
       description: offer.description,
+      available_time: offer.available_time ?? null,
     })
     setLiveTime(new Date())
   }
@@ -441,6 +445,11 @@ export default function Home() {
             <p className="text-sm text-gray-600 mb-4">
               남은 수량: {selectedOffer.remain_qty}개 / 전체 {selectedOffer.total_qty}개
             </p>
+            {selectedOffer.available_time && (
+              <p className="text-sm font-medium text-amber-700 mb-4">
+                ⏰ 이용 가능 시간: {selectedOffer.available_time}
+              </p>
+            )}
 
             {/* 5. 주소 텍스트 (메인 + 상세) */}
             <p className="text-sm text-gray-600 mb-4">
@@ -529,6 +538,11 @@ export default function Home() {
                             <p className="text-xs text-gray-600">
                               남은 수량: {offer.remain_qty}개 / 전체 {offer.total_qty}개
                             </p>
+                            {offer.available_time && (
+                              <span className="text-xs text-amber-600 font-medium">
+                                ⏰ 이용 가능 시간: {offer.available_time}
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div className="flex-shrink-0 pt-2 sm:pt-0 sm:pl-2 flex flex-wrap gap-2 justify-end">
@@ -714,6 +728,11 @@ export default function Home() {
               )}
               {ticketModal.description && (
                 <p className="mt-1 text-sm text-gray-600">{ticketModal.description}</p>
+              )}
+              {ticketModal.available_time && (
+                <p className="mt-2 text-sm font-medium text-amber-700">
+                  이용 시간: {ticketModal.available_time}
+                </p>
               )}
               <p className="mt-6 text-5xl font-extrabold tracking-tight text-sky-600">
                 발급 번호: {ticketModal.claimNo}번
