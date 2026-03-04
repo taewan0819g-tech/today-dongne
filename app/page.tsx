@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { format } from 'date-fns'
 import { ko } from 'date-fns/locale'
 import Image from 'next/image'
@@ -87,6 +87,15 @@ export default function Home() {
   const [distances, setDistances] = useState<Record<string, number>>({})
   const [showQrModal, setShowQrModal] = useState(false)
   const [shareOrigin, setShareOrigin] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  const scrollLeft = useCallback(() => {
+    scrollRef.current?.scrollBy({ left: -300, behavior: 'smooth' })
+  }, [])
+  const scrollRight = useCallback(() => {
+    scrollRef.current?.scrollBy({ left: 300, behavior: 'smooth' })
+  }, [])
+
   const selectedOffer = selectedOfferId
     ? offers.find((o) => o.id === selectedOfferId) ?? null
     : null
@@ -412,27 +421,53 @@ export default function Home() {
 
             {/* 2. 가게 사진 (가로 스크롤/캐러셀) - 원본 비율 유지, object-contain, 스크롤바 숨김 */}
             {selectedOffer.image_urls && selectedOffer.image_urls.length > 0 && (
-              <div
-                className="w-full overflow-x-auto snap-x snap-mandatory flex gap-0 -mx-4 mb-4 scrollbar-hide"
-                style={{
-                  scrollbarWidth: 'none',
-                  msOverflowStyle: 'none',
-                }}
-              >
-                {selectedOffer.image_urls.map((url, i) => (
-                  <div
-                    key={i}
-                    className="flex-shrink-0 w-full max-w-full snap-center flex items-center justify-center bg-gray-100 min-h-[120px]"
-                    style={{ maxHeight: 400 }}
-                  >
-                    <img
-                      src={url}
-                      alt={`${selectedOffer.store_name} ${i + 1}`}
-                      className="w-full h-auto max-h-[400px] object-contain block"
-                      style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'contain' }}
-                    />
-                  </div>
-                ))}
+              <div className="relative -mx-4 mb-4">
+                <div
+                  ref={scrollRef}
+                  className="w-full overflow-x-auto snap-x snap-mandatory flex gap-0 scrollbar-hide"
+                  style={{
+                    scrollbarWidth: 'none',
+                    msOverflowStyle: 'none',
+                  }}
+                >
+                  {selectedOffer.image_urls.map((url, i) => (
+                    <div
+                      key={i}
+                      className="flex-shrink-0 w-full max-w-full snap-center flex items-center justify-center bg-gray-100 min-h-[120px]"
+                      style={{ maxHeight: 400 }}
+                    >
+                      <img
+                        src={url}
+                        alt={`${selectedOffer.store_name} ${i + 1}`}
+                        className="w-full h-auto max-h-[400px] object-contain block"
+                        style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'contain' }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {selectedOffer.image_urls.length >= 2 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={scrollLeft}
+                      className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full w-8 h-8 bg-black/50 hover:bg-black/70 text-white flex items-center justify-center text-lg font-bold shrink-0"
+                      aria-label="이전 사진"
+                    >
+                      &lt;
+                    </button>
+                    <button
+                      type="button"
+                      onClick={scrollRight}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full w-8 h-8 bg-black/50 hover:bg-black/70 text-white flex items-center justify-center text-lg font-bold shrink-0"
+                      aria-label="다음 사진"
+                    >
+                      &gt;
+                    </button>
+                  </>
+                )}
+                <span className="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded-md">
+                  총 {selectedOffer.image_urls.length}장
+                </span>
               </div>
             )}
 
